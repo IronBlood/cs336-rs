@@ -153,3 +153,33 @@ pub fn find_pretoken_spans(
 
     Ok(all_pieces)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_find_special_tokens_should_return_the_smallest_occurance() {
+        let data: Vec<u8> = vec![1, 2, 3, 4, 5];
+        let special_tokens_bytes: Vec<Vec<u8>> = vec![vec![8], vec![5], vec![3]];
+
+        let offset = find_special_tokens(&data, &special_tokens_bytes);
+        assert_eq!(offset, Some(2));
+    }
+
+    #[test]
+    fn test_find_special_tokens_should_return_none() {
+        let data: Vec<u8> = vec![1, 2, 3, 4, 5];
+        let special_tokens_bytes: Vec<Vec<u8>> = vec![vec![8]];
+        let offset = find_special_tokens(&data, &special_tokens_bytes);
+        assert!(offset.is_none());
+    }
+
+    #[test]
+    fn test_find_special_tokens_with_empty_special_tokens() {
+        let data: Vec<u8> = vec![1, 2, 3, 4, 5];
+        let special_tokens_bytes: Vec<Vec<u8>> = vec![];
+        let offset = find_special_tokens(&data, &special_tokens_bytes);
+        assert!(offset.is_none());
+    }
+}
