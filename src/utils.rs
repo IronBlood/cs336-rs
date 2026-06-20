@@ -21,7 +21,7 @@ fn find_special_tokens(chunk: &[u8], special_tokens_bytes: &[Vec<u8>]) -> Option
 pub fn find_chunk_boundaries(
     content: &[u8],
     desired_num_chunks: usize,
-    special_tokens: &[&String],
+    special_tokens: &[String],
 ) -> Vec<usize> {
     let desired_num_chunks = if desired_num_chunks == 0 {
         1
@@ -181,5 +181,51 @@ mod tests {
         let special_tokens_bytes: Vec<Vec<u8>> = vec![];
         let offset = find_special_tokens(&data, &special_tokens_bytes);
         assert!(offset.is_none());
+    }
+
+    #[test]
+    fn test_find_chunk_boundaries_1_chunk_should_return_start_and_end() {
+        let content = vec![1, 2, 3];
+        let special_tokens = vec!["a".to_string()];
+        let boundaries = find_chunk_boundaries(&content, 1, &special_tokens);
+        assert_eq!(boundaries.len(), 2);
+        assert_eq!(boundaries[0], 0);
+        assert_eq!(boundaries[1], content.len());
+    }
+
+    #[test]
+    fn test_find_chunk_boundaries_0_chunk_should_fall_to_1() {
+        let content = vec![1, 2, 3];
+        let special_tokens = vec!["a".to_string()];
+        let boundaries = find_chunk_boundaries(&content, 0, &special_tokens);
+        assert_eq!(boundaries.len(), 2);
+        assert_eq!(boundaries[0], 0);
+        assert_eq!(boundaries[1], content.len());
+    }
+
+    #[test]
+    fn test_find_chunk_boundaries_should_return_the_correct_location() {
+        let text = "abc<|>abc<|>abc";
+        let content = text.as_bytes();
+        let special_token = vec!["<|>".to_string()];
+        let boundaries = find_chunk_boundaries(&content, 2, &special_token);
+        assert_eq!(boundaries.len(), 3);
+        assert_eq!(boundaries[0], 0);
+        assert_eq!(boundaries[1], 9);
+        assert_eq!(boundaries[2], content.len());
+    }
+
+    #[test]
+    fn test_find_pretoken_spans() {
+        let text = "abc<|>abc<|>abc";
+        let content = text.as_bytes();
+        let special_token = vec!["<|>".to_string()];
+        let boundaries = find_chunk_boundaries(&content, 2, &special_token);
+        let spans = find_pretoken_spans(&content, &boundaries, &special_token);
+        let mut spans = spans.expect("operation should succeed");
+        spans.sort();
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0], vec![(0, 3), (6, 9)]);
+        assert_eq!(spans[1], vec![(12, 15)]);
     }
 }
