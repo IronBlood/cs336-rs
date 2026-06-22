@@ -7,6 +7,7 @@ use std::{
 
 pub type Span = (usize, usize);
 pub type WordFreqMap = HashMap<Vec<u8>, usize>;
+type BorrowedWordFreqMap<'a> = HashMap<&'a [u8], usize>;
 
 fn find_special_tokens(chunk: &[u8], special_tokens_bytes: &[Vec<u8>]) -> Option<usize> {
     let first_offset: Option<usize> = special_tokens_bytes
@@ -125,7 +126,7 @@ pub fn find_pretoken_spans(
                 let mut last = 0;
                 let text_offset = start;
 
-                for mat in re.find_iter(text) {
+                for mat in re.find_iter(text)? {
                     let mat = mat?;
                     let piece_start = text_offset + last;
                     let piece_end = text_offset + mat.start();
@@ -186,8 +187,8 @@ pub fn build_token_freq_map(
             let span_start = span.0;
             let span_end = span.1;
 
-            handles.push(scope.spawn(move || -> Result<WordFreqMap, CustomError> {
-                let mut local_freq_map: WordFreqMap = HashMap::new();
+            handles.push(scope.spawn(move || -> Result<BorrowedWordFreqMap<'_>, CustomError> {
+                let mut local_freq_map: BorrowedWordFreqMap<'_> = HashMap::new();
                 for span_idx in span_start..span_end {
                     let piece: Span = all_pieces[span_idx];
                     let (s, e) = piece;
@@ -195,12 +196,12 @@ pub fn build_token_freq_map(
                     let text = str::from_utf8(chunk)?;
 
                     let text_offset = s;
-                    for mat in re.find_iter(text) {
+                    for mat in re.find_iter(text)? {
                         let mat = mat?;
                         let matched_start = text_offset + mat.start();
                         let matched_end = text_offset + mat.end();
                         let matched_bytes = &content[matched_start..matched_end];
-                        *local_freq_map.entry(matched_bytes.into()).or_insert(0) += 1;
+                        *local_freq_map.entry(matched_bytes).or_insert(0) += 1;
                     }
                 }
 
@@ -212,7 +213,11 @@ pub fn build_token_freq_map(
         for handle in handles {
             let thread_freq_map = handle.join().map_err(|_| CustomError::ThreadPanic)??;
             for (token, count) in thread_freq_map {
-                *freq_map.entry(token).or_insert(0) += count;
+                if let Some(total) = freq_map.get_mut(token) {
+                    *total += count;
+                } else {
+                    freq_map.insert(token.to_vec(), count);
+                }
             }
         }
 
