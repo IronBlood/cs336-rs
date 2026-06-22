@@ -6,8 +6,8 @@ use std::{
 };
 
 use super::ffi::{
-    PCRE2_ERROR_NOMATCH, Pcre2Code8, Pcre2MatchData8, pcre2_code_free_8, pcre2_compile_8,
-    pcre2_get_error_message_8, pcre2_get_ovector_pointer_8, pcre2_match_8,
+    PCRE2_ERROR_NOMATCH, PCRE2_UCP, PCRE2_UTF, Pcre2Code8, Pcre2MatchData8, pcre2_code_free_8,
+    pcre2_compile_8, pcre2_get_error_message_8, pcre2_get_ovector_pointer_8, pcre2_match_8,
     pcre2_match_data_create_from_pattern_8, pcre2_match_data_free_8,
 };
 
@@ -84,7 +84,7 @@ impl Regex {
             pcre2_compile_8(
                 pattern.as_ptr(),
                 pattern.len(),
-                0,
+                PCRE2_UTF | PCRE2_UCP,
                 &mut error_code,
                 &mut error_offset,
                 ptr::null_mut(),
@@ -273,5 +273,14 @@ mod tests {
 
         let m = regex.find(br"xxa.|b\Ecyy").expect("should be executed");
         assert_eq!(m, Some(2..9));
+    }
+
+    #[test]
+    fn unicode_properties_should_match_utf8_codepoints() {
+        let regex = Regex::new(r"\p{L}++").expect("Regex should be compiled");
+
+        let text = "é";
+        let m = regex.find(text.as_bytes()).expect("should be executed");
+        assert_eq!(m, Some(0..text.len()));
     }
 }

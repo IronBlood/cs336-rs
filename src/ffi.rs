@@ -8,6 +8,8 @@ pub type Pcre2GeneralContext8 = c_void;
 pub type Pcre2MatchContext8 = c_void;
 
 pub const PCRE2_ERROR_NOMATCH: c_int = -1;
+pub const PCRE2_UCP: c_uint = 0x00020000;
+pub const PCRE2_UTF: c_uint = 0x00080000;
 
 #[link(name = "pcre2-8")]
 unsafe extern "C" {
