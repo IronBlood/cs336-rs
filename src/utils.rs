@@ -5,8 +5,8 @@ use std::{
     thread,
 };
 
-type Span = (usize, usize);
-type WordFreqMap = HashMap<Vec<u8>, usize>;
+pub type Span = (usize, usize);
+pub type WordFreqMap = HashMap<Vec<u8>, usize>;
 
 fn find_special_tokens(chunk: &[u8], special_tokens_bytes: &[Vec<u8>]) -> Option<usize> {
     let first_offset: Option<usize> = special_tokens_bytes
