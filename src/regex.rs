@@ -7,9 +7,9 @@ use std::{
 
 use super::ffi::{
     PCRE2_ERROR_NOMATCH, PCRE2_JIT_COMPLETE, PCRE2_UCP, PCRE2_UTF, Pcre2Code8, Pcre2MatchData8,
-    pcre2_code_free_8, pcre2_compile_8, pcre2_get_error_message_8,
-    pcre2_get_ovector_pointer_8, pcre2_jit_compile_8, pcre2_jit_match_8, pcre2_match_8,
-    pcre2_match_data_create_from_pattern_8, pcre2_match_data_free_8,
+    pcre2_code_free_8, pcre2_compile_8, pcre2_get_error_message_8, pcre2_get_ovector_pointer_8,
+    pcre2_jit_compile_8, pcre2_jit_match_8, pcre2_match_8, pcre2_match_data_create_from_pattern_8,
+    pcre2_match_data_free_8,
 };
 
 #[derive(Debug)]
@@ -98,8 +98,7 @@ impl Regex {
             offset: error_offset,
             message: pcre2_error_message(error_code),
         })?;
-        let jit_enabled =
-            unsafe { pcre2_jit_compile_8(code.as_ptr(), PCRE2_JIT_COMPLETE) } == 0;
+        let jit_enabled = unsafe { pcre2_jit_compile_8(code.as_ptr(), PCRE2_JIT_COMPLETE) } == 0;
 
         Ok(Self { code, jit_enabled })
     }
@@ -167,12 +166,7 @@ impl Regex {
         Ok(Some(Match { start, end }))
     }
 
-    fn match_once(
-        &self,
-        subject: &[u8],
-        start_offset: usize,
-        match_data: &mut MatchData,
-    ) -> i32 {
+    fn match_once(&self, subject: &[u8], start_offset: usize, match_data: &mut MatchData) -> i32 {
         unsafe {
             if self.jit_enabled {
                 pcre2_jit_match_8(

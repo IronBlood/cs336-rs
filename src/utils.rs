@@ -200,26 +200,28 @@ pub fn build_token_freq_map(
         let re = &re_match;
 
         for (span_start, span_end) in chunks {
-            handles.push(scope.spawn(move || -> Result<BorrowedWordFreqMap<'_>, CustomError> {
-                let mut local_freq_map: BorrowedWordFreqMap<'_> = HashMap::new();
-                for span_idx in span_start..span_end {
-                    let piece: Span = all_pieces[span_idx];
-                    let (s, e) = piece;
-                    let chunk = &content[s..e];
-                    let text = str::from_utf8(chunk)?;
+            handles.push(
+                scope.spawn(move || -> Result<BorrowedWordFreqMap<'_>, CustomError> {
+                    let mut local_freq_map: BorrowedWordFreqMap<'_> = HashMap::new();
+                    for span_idx in span_start..span_end {
+                        let piece: Span = all_pieces[span_idx];
+                        let (s, e) = piece;
+                        let chunk = &content[s..e];
+                        let text = str::from_utf8(chunk)?;
 
-                    let text_offset = s;
-                    for mat in re.find_iter(text)? {
-                        let mat = mat?;
-                        let matched_start = text_offset + mat.start();
-                        let matched_end = text_offset + mat.end();
-                        let matched_bytes = &content[matched_start..matched_end];
-                        *local_freq_map.entry(matched_bytes).or_insert(0) += 1;
+                        let text_offset = s;
+                        for mat in re.find_iter(text)? {
+                            let mat = mat?;
+                            let matched_start = text_offset + mat.start();
+                            let matched_end = text_offset + mat.end();
+                            let matched_bytes = &content[matched_start..matched_end];
+                            *local_freq_map.entry(matched_bytes).or_insert(0) += 1;
+                        }
                     }
-                }
 
-                Ok(local_freq_map)
-            }));
+                    Ok(local_freq_map)
+                }),
+            );
         }
 
         let mut freq_map: WordFreqMap = HashMap::new();
@@ -239,7 +241,9 @@ pub fn build_token_freq_map(
 }
 
 fn convert_freq_map_to_u16(map: HashMap<Vec<u8>, usize>) -> HashMap<Vec<u16>, usize> {
-    map.into_iter().map(|(token, count)| (token.into_iter().map(|b| b as u16).collect(), count)).collect()
+    map.into_iter()
+        .map(|(token, count)| (token.into_iter().map(|b| b as u16).collect(), count))
+        .collect()
 }
 
 /**
@@ -258,7 +262,10 @@ fn count_pairs_internal(all_pairs: &[(&[u16], usize)]) -> HashMap<[u16; 2], usiz
     count_map
 }
 
-fn count_pairs(map: &HashMap<Vec<u16>, usize>, threads: usize) -> Result<HashMap<[u16; 2], usize>, CustomError> {
+fn count_pairs(
+    map: &HashMap<Vec<u16>, usize>,
+    threads: usize,
+) -> Result<HashMap<[u16; 2], usize>, CustomError> {
     let mut all_pairs: Vec<(&[u16], usize)> = Vec::new();
     for (k, v) in map {
         if k.len() >= 2 {
@@ -299,7 +306,10 @@ fn count_pairs(map: &HashMap<Vec<u16>, usize>, threads: usize) -> Result<HashMap
 }
 
 fn get_largest_pair(count_map: &HashMap<[u16; 2], usize>) -> Option<[u16; 2]> {
-    count_map.iter().max_by_key(|(pair, count)| (*count, *pair)).map(|(pair, _count)| *pair)
+    count_map
+        .iter()
+        .max_by_key(|(pair, count)| (*count, *pair))
+        .map(|(pair, _count)| *pair)
 }
 
 #[cfg(test)]

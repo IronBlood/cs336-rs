@@ -34,12 +34,18 @@ fn parse_args() -> Result<CliArgs, String> {
                 .map(PathBuf::from)
                 .ok_or_else(|| format!("usage: {program} <file_path> <threads> [-o output.tsv]"))?,
         ),
-        Some(_) => return Err(format!("usage: {program} <file_path> <threads> [-o output.tsv]")),
+        Some(_) => {
+            return Err(format!(
+                "usage: {program} <file_path> <threads> [-o output.tsv]"
+            ));
+        }
         None => None,
     };
 
     if args.next().is_some() {
-        return Err(format!("usage: {program} <file_path> <threads> [-o output.tsv]"));
+        return Err(format!(
+            "usage: {program} <file_path> <threads> [-o output.tsv]"
+        ));
     }
 
     Ok(CliArgs {
