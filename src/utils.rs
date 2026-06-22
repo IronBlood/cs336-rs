@@ -1,5 +1,5 @@
 use crate::error::CustomError;
-use regex::Regex;
+use crate::regex::Regex;
 use std::{
     collections::{HashMap, HashSet},
     thread,
@@ -126,6 +126,7 @@ pub fn find_pretoken_spans(
                 let text_offset = start;
 
                 for mat in re.find_iter(text) {
+                    let mat = mat?;
                     let piece_start = text_offset + last;
                     let piece_end = text_offset + mat.start();
 
@@ -195,6 +196,7 @@ pub fn build_token_freq_map(
 
                     let text_offset = s;
                     for mat in re.find_iter(text) {
+                        let mat = mat?;
                         let matched_start = text_offset + mat.start();
                         let matched_end = text_offset + mat.end();
                         let matched_bytes = &content[matched_start..matched_end];

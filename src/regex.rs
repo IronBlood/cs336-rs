@@ -1,6 +1,7 @@
 use std::{
     error::Error,
     fmt,
+    ops::Range,
     ptr::{self, NonNull},
 };
 
@@ -48,6 +49,32 @@ pub struct Regex {
     code: NonNull<Pcre2Code8>,
 }
 
+// A compiled PCRE2 pattern is immutable after construction. Matching state is
+// kept in per-call match data, so sharing the compiled pattern across scoped
+// worker threads is safe.
+unsafe impl Send for Regex {}
+unsafe impl Sync for Regex {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Match {
+    start: usize,
+    end: usize,
+}
+
+impl Match {
+    pub fn start(&self) -> usize {
+        self.start
+    }
+
+    pub fn end(&self) -> usize {
+        self.end
+    }
+
+    pub fn range(&self) -> Range<usize> {
+        self.start..self.end
+    }
+}
+
 impl Regex {
     pub fn new(pattern: &str) -> Result<Self, RegexError> {
         let mut error_code = 0;
@@ -72,7 +99,28 @@ impl Regex {
         Ok(Self { code })
     }
 
-    pub fn find(&self, subject: &[u8]) -> Result<Option<std::ops::Range<usize>>, RegexError> {
+    pub fn find(&self, subject: &[u8]) -> Result<Option<Range<usize>>, RegexError> {
+        self.find_from(subject, 0)
+            .map(|found| found.map(|m| m.range()))
+    }
+
+    pub fn find_iter<'regex, 'subject>(
+        &'regex self,
+        subject: &'subject str,
+    ) -> FindIter<'regex, 'subject> {
+        FindIter {
+            regex: self,
+            subject,
+            next_start: 0,
+            finished: false,
+        }
+    }
+
+    fn find_from(&self, subject: &[u8], start_offset: usize) -> Result<Option<Match>, RegexError> {
+        if start_offset > subject.len() {
+            return Err(RegexError::InvalidOffsets);
+        }
+
         let match_data =
             unsafe { pcre2_match_data_create_from_pattern_8(self.code.as_ptr(), ptr::null_mut()) };
 
@@ -83,7 +131,7 @@ impl Regex {
                 self.code.as_ptr(),
                 subject.as_ptr(),
                 subject.len(),
-                0,
+                start_offset,
                 0,
                 match_data.as_mut_ptr(),
                 ptr::null_mut(),
@@ -115,7 +163,47 @@ impl Regex {
             return Err(RegexError::InvalidOffsets);
         }
 
-        Ok(Some(start..end))
+        Ok(Some(Match { start, end }))
+    }
+}
+
+pub struct FindIter<'regex, 'subject> {
+    regex: &'regex Regex,
+    subject: &'subject str,
+    next_start: usize,
+    finished: bool,
+}
+
+impl Iterator for FindIter<'_, '_> {
+    type Item = Result<Match, RegexError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.finished {
+            return None;
+        }
+
+        let subject = self.subject.as_bytes();
+        let found = match self.regex.find_from(subject, self.next_start) {
+            Ok(Some(found)) => found,
+            Ok(None) => {
+                self.finished = true;
+                return None;
+            }
+            Err(err) => {
+                self.finished = true;
+                return Some(Err(err));
+            }
+        };
+
+        if found.end > self.next_start {
+            self.next_start = found.end;
+        } else if self.next_start < subject.len() {
+            self.next_start += 1;
+        } else {
+            self.finished = true;
+        }
+
+        Some(Ok(found))
     }
 }
 
