@@ -1,8 +1,12 @@
 use crate::error::CustomError;
 use regex::Regex;
-use std::{collections::HashSet, thread};
+use std::{
+    collections::{HashMap, HashSet},
+    thread,
+};
 
 type Span = (usize, usize);
+type WordFreqMap = HashMap<Vec<u8>, usize>;
 
 fn find_special_tokens(chunk: &[u8], special_tokens_bytes: &[Vec<u8>]) -> Option<usize> {
     let first_offset: Option<usize> = special_tokens_bytes
@@ -106,7 +110,7 @@ pub fn find_pretoken_spans(
         .map(|token| regex::escape(token))
         .collect::<Vec<_>>()
         .join("|");
-    let re_split = Regex::new(&split_pattern).unwrap();
+    let re_split = Regex::new(&split_pattern)?;
 
     let all_pieces = thread::scope(|scope| -> Result<Vec<Vec<Span>>, CustomError> {
         let mut handles = vec![];
@@ -144,7 +148,7 @@ pub fn find_pretoken_spans(
         let mut all_pieces = vec![];
 
         for handle in handles {
-            let chunk_pieces = handle.join().unwrap()?;
+            let chunk_pieces = handle.join().map_err(|_| CustomError::ThreadPanic)??;
             all_pieces.push(chunk_pieces);
         }
 
@@ -152,6 +156,66 @@ pub fn find_pretoken_spans(
     })?;
 
     Ok(all_pieces)
+}
+
+pub fn build_token_freq_map(
+    content: &[u8],
+    all_pieces: &[Span],
+    threads: usize,
+    regex_str: &str,
+) -> Result<HashMap<Vec<u8>, usize>, CustomError> {
+    if all_pieces.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let re_match = Regex::new(regex_str)?;
+
+    let threads = threads.clamp(1, all_pieces.len().max(1));
+    let pieces_per_thread = 1usize.max(all_pieces.len().div_ceil(threads));
+    let mut chunks: Vec<Span> = (0..threads)
+        .map(|idx| (idx * pieces_per_thread, (idx + 1) * pieces_per_thread))
+        .collect();
+    chunks[threads - 1].1 = all_pieces.len();
+
+    thread::scope(|scope| -> Result<WordFreqMap, CustomError> {
+        let mut handles = Vec::new();
+        let re = &re_match;
+
+        for span in chunks {
+            let span_start = span.0;
+            let span_end = span.1;
+
+            handles.push(scope.spawn(move || -> Result<WordFreqMap, CustomError> {
+                let mut local_freq_map: WordFreqMap = HashMap::new();
+                for span_idx in span_start..span_end {
+                    let piece: Span = all_pieces[span_idx];
+                    let (s, e) = piece;
+                    let chunk = &content[s..e];
+                    let text = str::from_utf8(chunk)?;
+
+                    let text_offset = s;
+                    for mat in re.find_iter(text) {
+                        let matched_start = text_offset + mat.start();
+                        let matched_end = text_offset + mat.end();
+                        let matched_bytes = &content[matched_start..matched_end];
+                        *local_freq_map.entry(matched_bytes.into()).or_insert(0) += 1;
+                    }
+                }
+
+                Ok(local_freq_map)
+            }));
+        }
+
+        let mut freq_map: WordFreqMap = HashMap::new();
+        for handle in handles {
+            let thread_freq_map = handle.join().map_err(|_| CustomError::ThreadPanic)??;
+            for (token, count) in thread_freq_map {
+                *freq_map.entry(token).or_insert(0) += count;
+            }
+        }
+
+        Ok(freq_map)
+    })
 }
 
 #[cfg(test)]
@@ -227,5 +291,24 @@ mod tests {
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[0], vec![(0, 3), (6, 9)]);
         assert_eq!(spans[1], vec![(12, 15)]);
+    }
+
+    #[test]
+    fn test_find_token_freq_map() {
+        let text = "abc<|>abc<|>abc";
+        let content = text.as_bytes();
+        let special_token = vec!["<|>".to_string()];
+        let boundaries = find_chunk_boundaries(&content, 2, &special_token);
+        let spans = find_pretoken_spans(&content, &boundaries, &special_token);
+        let mut spans = spans.expect("operation should succeed");
+        spans.sort();
+
+        // continue from `test_find_pretoken_spans`
+        let all_pieces: Vec<Span> = spans.into_iter().flatten().collect();
+        let freq_map = build_token_freq_map(&content, &all_pieces, 2, "\\w+");
+        let freq_map = freq_map.expect("operation should succeed");
+        assert_eq!(freq_map.len(), 1);
+        let count = freq_map.get("abc".as_bytes());
+        assert_eq!(count, Some(&3));
     }
 }
