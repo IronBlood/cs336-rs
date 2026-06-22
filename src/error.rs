@@ -1,7 +1,9 @@
+use crate::regex::RegexError;
+
 #[derive(Debug)]
 pub enum CustomError {
     InvalidUtf8(std::str::Utf8Error),
-    InvalidRegex(regex::Error),
+    InvalidRegex(RegexError),
     ThreadPanic,
 }
 
@@ -11,8 +13,8 @@ impl From<std::str::Utf8Error> for CustomError {
     }
 }
 
-impl From<regex::Error> for CustomError {
-    fn from(err: regex::Error) -> Self {
+impl From<RegexError> for CustomError {
+    fn from(err: RegexError) -> Self {
         Self::InvalidRegex(err)
     }
 }
