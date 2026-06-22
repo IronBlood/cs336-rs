@@ -1,5 +1,5 @@
 use crate::error::CustomError;
-use crate::regex::Regex;
+use crate::regex::{Regex, escape_literal};
 use std::{
     collections::{HashMap, HashSet},
     thread,
@@ -107,7 +107,7 @@ pub fn find_pretoken_spans(
 
     let split_pattern = special_tokens
         .iter()
-        .map(|token| regex::escape(token))
+        .map(|token| escape_literal(token))
         .collect::<Vec<_>>()
         .join("|");
     let re_split = Regex::new(&split_pattern)?;

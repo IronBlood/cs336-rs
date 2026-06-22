@@ -167,6 +167,10 @@ impl Regex {
     }
 }
 
+pub fn escape_literal(literal: &str) -> String {
+    format!(r"\Q{}\E", literal.replace(r"\E", r"\E\\E\Q"))
+}
+
 pub struct FindIter<'regex, 'subject> {
     regex: &'regex Regex,
     subject: &'subject str,
@@ -260,5 +264,14 @@ mod tests {
 
         let m = regex.find(b"xyz").expect("should be executed");
         assert_eq!(m, None);
+    }
+
+    #[test]
+    fn escape_literal_should_quote_regex_metacharacters() {
+        let pattern = escape_literal(r"a.|b\Ec");
+        let regex = Regex::new(&pattern).expect("escaped literal should compile");
+
+        let m = regex.find(br"xxa.|b\Ecyy").expect("should be executed");
+        assert_eq!(m, Some(2..9));
     }
 }
