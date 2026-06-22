@@ -1,10 +1,16 @@
-use std::{env, fs, path::PathBuf, process, thread};
+use std::{
+    env, fs,
+    io::{self, Write},
+    path::PathBuf,
+    process, thread,
+};
 
 use cs336_rs::utils::{Span, build_token_freq_map, find_chunk_boundaries, find_pretoken_spans};
 
 struct CliArgs {
     file_path: PathBuf,
     threads: usize,
+    output_path: Option<PathBuf>,
 }
 
 fn parse_args() -> Result<CliArgs, String> {
@@ -22,11 +28,48 @@ fn parse_args() -> Result<CliArgs, String> {
         .parse::<usize>()
         .map_err(|err| format!("invalid thread count: {err}"))?;
 
+    let output_path = match args.next() {
+        Some(flag) if flag == "-o" => Some(
+            args.next()
+                .map(PathBuf::from)
+                .ok_or_else(|| format!("usage: {program} <file_path> <threads> [-o output.tsv]"))?,
+        ),
+        Some(_) => return Err(format!("usage: {program} <file_path> <threads> [-o output.tsv]")),
+        None => None,
+    };
+
     if args.next().is_some() {
-        return Err(format!("usage: {program} <file_path> <threads>"));
+        return Err(format!("usage: {program} <file_path> <threads> [-o output.tsv]"));
     }
 
-    Ok(CliArgs { file_path, threads })
+    Ok(CliArgs {
+        file_path,
+        threads,
+        output_path,
+    })
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for &byte in bytes {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    output
+}
+
+fn write_freq_map(path: &PathBuf, freq_map: &cs336_rs::utils::WordFreqMap) -> io::Result<()> {
+    let mut entries = freq_map.iter().collect::<Vec<_>>();
+    entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+
+    let mut file = fs::File::create(path)?;
+    for (token, count) in entries {
+        writeln!(file, "{}\t{}", hex_encode(token), count)?;
+    }
+
+    Ok(())
 }
 
 fn main() {
@@ -61,4 +104,11 @@ fn main() {
     println!("result: {} entries", freq_map.len());
     let total_count: usize = freq_map.values().sum();
     println!("result: {} total tokens", total_count);
+
+    if let Some(output_path) = args.output_path {
+        write_freq_map(&output_path, &freq_map).unwrap_or_else(|err| {
+            eprintln!("failed to write {}: {err}", output_path.display());
+            process::exit(1);
+        });
+    }
 }
