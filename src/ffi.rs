@@ -8,6 +8,7 @@ pub type Pcre2GeneralContext8 = c_void;
 pub type Pcre2MatchContext8 = c_void;
 
 pub const PCRE2_ERROR_NOMATCH: c_int = -1;
+pub const PCRE2_JIT_COMPLETE: c_uint = 0x00000001;
 pub const PCRE2_UCP: c_uint = 0x00020000;
 pub const PCRE2_UTF: c_uint = 0x00080000;
 
@@ -24,6 +25,8 @@ unsafe extern "C" {
 
     pub fn pcre2_code_free_8(code: *mut Pcre2Code8);
 
+    pub fn pcre2_jit_compile_8(code: *mut Pcre2Code8, options: c_uint) -> c_int;
+
     pub fn pcre2_match_data_create_from_pattern_8(
         code: *const Pcre2Code8,
         general_context: *mut Pcre2GeneralContext8,
@@ -32,6 +35,16 @@ unsafe extern "C" {
     pub fn pcre2_match_data_free_8(match_data: *mut Pcre2MatchData8);
 
     pub fn pcre2_match_8(
+        code: *const Pcre2Code8,
+        subject: *const u8,
+        length: Pcre2Size,
+        start_offset: Pcre2Size,
+        options: c_uint,
+        match_data: *mut Pcre2MatchData8,
+        match_context: *mut Pcre2MatchContext8,
+    ) -> c_int;
+
+    pub fn pcre2_jit_match_8(
         code: *const Pcre2Code8,
         subject: *const u8,
         length: Pcre2Size,

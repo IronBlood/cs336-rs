@@ -6,8 +6,9 @@ use std::{
 };
 
 use super::ffi::{
-    PCRE2_ERROR_NOMATCH, PCRE2_UCP, PCRE2_UTF, Pcre2Code8, Pcre2MatchData8, pcre2_code_free_8,
-    pcre2_compile_8, pcre2_get_error_message_8, pcre2_get_ovector_pointer_8, pcre2_match_8,
+    PCRE2_ERROR_NOMATCH, PCRE2_JIT_COMPLETE, PCRE2_UCP, PCRE2_UTF, Pcre2Code8, Pcre2MatchData8,
+    pcre2_code_free_8, pcre2_compile_8, pcre2_get_error_message_8,
+    pcre2_get_ovector_pointer_8, pcre2_jit_compile_8, pcre2_jit_match_8, pcre2_match_8,
     pcre2_match_data_create_from_pattern_8, pcre2_match_data_free_8,
 };
 
@@ -47,6 +48,7 @@ impl Error for RegexError {}
 
 pub struct Regex {
     code: NonNull<Pcre2Code8>,
+    jit_enabled: bool,
 }
 
 // A compiled PCRE2 pattern is immutable after construction. Matching state is
@@ -96,7 +98,10 @@ impl Regex {
             offset: error_offset,
             message: pcre2_error_message(error_code),
         })?;
-        Ok(Self { code })
+        let jit_enabled =
+            unsafe { pcre2_jit_compile_8(code.as_ptr(), PCRE2_JIT_COMPLETE) } == 0;
+
+        Ok(Self { code, jit_enabled })
     }
 
     pub fn find(&self, subject: &[u8]) -> Result<Option<Range<usize>>, RegexError> {
@@ -107,13 +112,19 @@ impl Regex {
     pub fn find_iter<'regex, 'subject>(
         &'regex self,
         subject: &'subject str,
-    ) -> FindIter<'regex, 'subject> {
-        FindIter {
+    ) -> Result<FindIter<'regex, 'subject>, RegexError> {
+        let match_data =
+            unsafe { pcre2_match_data_create_from_pattern_8(self.code.as_ptr(), ptr::null_mut()) };
+
+        let match_data = MatchData::new(match_data).ok_or(RegexError::Allocation)?;
+
+        Ok(FindIter {
             regex: self,
             subject,
+            match_data,
             next_start: 0,
             finished: false,
-        }
+        })
     }
 
     fn find_from(&self, subject: &[u8], start_offset: usize) -> Result<Option<Match>, RegexError> {
@@ -126,17 +137,7 @@ impl Regex {
 
         let mut match_data = MatchData::new(match_data).ok_or(RegexError::Allocation)?;
 
-        let result = unsafe {
-            pcre2_match_8(
-                self.code.as_ptr(),
-                subject.as_ptr(),
-                subject.len(),
-                start_offset,
-                0,
-                match_data.as_mut_ptr(),
-                ptr::null_mut(),
-            )
-        };
+        let result = self.match_once(subject, start_offset, &mut match_data);
 
         if result == PCRE2_ERROR_NOMATCH {
             return Ok(None);
@@ -165,6 +166,37 @@ impl Regex {
 
         Ok(Some(Match { start, end }))
     }
+
+    fn match_once(
+        &self,
+        subject: &[u8],
+        start_offset: usize,
+        match_data: &mut MatchData,
+    ) -> i32 {
+        unsafe {
+            if self.jit_enabled {
+                pcre2_jit_match_8(
+                    self.code.as_ptr(),
+                    subject.as_ptr(),
+                    subject.len(),
+                    start_offset,
+                    0,
+                    match_data.as_mut_ptr(),
+                    ptr::null_mut(),
+                )
+            } else {
+                pcre2_match_8(
+                    self.code.as_ptr(),
+                    subject.as_ptr(),
+                    subject.len(),
+                    start_offset,
+                    0,
+                    match_data.as_mut_ptr(),
+                    ptr::null_mut(),
+                )
+            }
+        }
+    }
 }
 
 pub fn escape_literal(literal: &str) -> String {
@@ -174,6 +206,7 @@ pub fn escape_literal(literal: &str) -> String {
 pub struct FindIter<'regex, 'subject> {
     regex: &'regex Regex,
     subject: &'subject str,
+    match_data: MatchData,
     next_start: usize,
     finished: bool,
 }
@@ -187,22 +220,52 @@ impl Iterator for FindIter<'_, '_> {
         }
 
         let subject = self.subject.as_bytes();
-        let found = match self.regex.find_from(subject, self.next_start) {
-            Ok(Some(found)) => found,
-            Ok(None) => {
+        let result = self
+            .regex
+            .match_once(subject, self.next_start, &mut self.match_data);
+
+        if result == PCRE2_ERROR_NOMATCH {
+            self.finished = true;
+            return None;
+        }
+
+        if result < 0 {
+            self.finished = true;
+            return Some(Err(RegexError::Match(result)));
+        }
+
+        let offsets = unsafe {
+            let pointer = pcre2_get_ovector_pointer_8(self.match_data.as_mut_ptr());
+
+            if pointer.is_null() {
                 self.finished = true;
-                return None;
+                return Some(Err(RegexError::InvalidOffsets));
             }
-            Err(err) => {
-                self.finished = true;
-                return Some(Err(err));
-            }
+
+            std::slice::from_raw_parts(pointer, 2)
         };
+
+        let found = Match {
+            start: offsets[0],
+            end: offsets[1],
+        };
+
+        if found.start > found.end || found.end > subject.len() {
+            self.finished = true;
+            return Some(Err(RegexError::InvalidOffsets));
+        }
 
         if found.end > self.next_start {
             self.next_start = found.end;
         } else if self.next_start < subject.len() {
-            self.next_start += 1;
+            match self.subject[self.next_start..].chars().next() {
+                Some(ch) => {
+                    self.next_start += ch.len_utf8();
+                }
+                None => {
+                    self.finished = true;
+                }
+            }
         } else {
             self.finished = true;
         }
