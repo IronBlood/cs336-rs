@@ -225,6 +225,67 @@ pub fn build_token_freq_map(
     })
 }
 
+fn convert_freq_map_to_u16(map: HashMap<Vec<u8>, usize>) -> HashMap<Vec<u16>, usize> {
+    map.into_iter().map(|(token, count)| (token.into_iter().map(|b| b as u16).collect(), count)).collect()
+}
+
+/**
+ * NOTE: this function assumes length of all keys are >= 2
+ */
+fn count_pairs_internal(all_pairs: &[(&[u16], usize)]) -> HashMap<[u16; 2], usize> {
+    let mut count_map = HashMap::<[u16; 2], usize>::new();
+
+    for (key, count) in all_pairs {
+        for pair in key.windows(2) {
+            let buf = [pair[0], pair[1]];
+            *count_map.entry(buf).or_insert(0) += *count;
+        }
+    }
+
+    count_map
+}
+
+fn count_pairs(map: &HashMap<Vec<u16>, usize>, threads: usize) -> Result<HashMap<[u16; 2], usize>, CustomError> {
+    let mut all_pairs: Vec<(&[u16], usize)> = Vec::new();
+    for (k, v) in map {
+        if k.len() >= 2 {
+            all_pairs.push((k.as_slice(), *v));
+        }
+    }
+
+    if threads == 1 {
+        Ok(count_pairs_internal(&all_pairs))
+    } else {
+        let pairs_per_thread = all_pairs.len().div_ceil(threads);
+        let mut slices: Vec<(usize, usize)> = (0..threads).map(|idx| (idx * pairs_per_thread, (idx + 1) * pairs_per_thread)).collect();
+        slices[threads - 1].1 = all_pairs.len();
+
+        thread::scope(|scope| -> Result<HashMap<[u16; 2], usize>, CustomError> {
+            let mut handles = Vec::new();
+            for (s, e) in slices {
+                let pair_slice = &all_pairs[s..e];
+                handles.push(scope.spawn(move || -> HashMap<[u16; 2], usize> {
+                    count_pairs_internal(pair_slice)
+                }));
+            }
+
+            let mut total_count = HashMap::<[u16; 2], usize>::new();
+            for handle in handles {
+                let thread_count = handle.join().map_err(|_| CustomError::ThreadPanic)?;
+                for (k, v) in thread_count {
+                    *total_count.entry(k).or_insert(0) += v;
+                }
+            }
+
+            Ok(total_count)
+        })
+    }
+}
+
+fn get_largest_pair(count_map: &HashMap<[u16; 2], usize>) -> Option<[u16; 2]> {
+    count_map.iter().max_by_key(|(pair, count)| (*count, *pair)).map(|(pair, _count)| *pair)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,5 +378,25 @@ mod tests {
         assert_eq!(freq_map.len(), 1);
         let count = freq_map.get("abc".as_bytes());
         assert_eq!(count, Some(&3));
+    }
+
+    #[test]
+    fn test_largest_pair() {
+        let mut count_map: HashMap<[u16; 2], usize> = HashMap::new();
+
+        count_map.insert(['l' as u16, 'o' as u16], 7);
+        count_map.insert(['o' as u16, 'w' as u16], 7);
+        count_map.insert(['w' as u16, 'e' as u16], 8);
+        count_map.insert(['e' as u16, 'r' as u16], 2);
+        count_map.insert(['w' as u16, 'i' as u16], 3);
+        count_map.insert(['i' as u16, 'd' as u16], 3);
+        count_map.insert(['d' as u16, 'e' as u16], 3);
+        count_map.insert(['e' as u16, 's' as u16], 9);
+        count_map.insert(['s' as u16, 't' as u16], 9);
+        count_map.insert(['n' as u16, 'e' as u16], 6);
+        count_map.insert(['e' as u16, 'w' as u16], 6);
+
+        let largest = get_largest_pair(&count_map);
+        assert_eq!(largest, Some(['s' as u16, 't' as u16]));
     }
 }
