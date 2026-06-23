@@ -306,10 +306,24 @@ fn count_pairs(
     }
 }
 
-fn get_largest_pair(count_map: &HashMap<[u16; 2], usize>) -> Option<[u16; 2]> {
+type WordTuple<'a> = (&'a Vec<u8>, &'a Vec<u8>);
+fn cmp_tuple<'a>(a: WordTuple<'a>, b: WordTuple<'a>) -> std::cmp::Ordering {
+    a.cmp(&b)
+}
+
+fn get_largest_pair(count_map: &HashMap<[u16; 2], usize>, vocab: &[Vec<u8>]) -> Option<[u16; 2]> {
     count_map
         .iter()
-        .max_by_key(|(pair, count)| (*count, *pair))
+        .max_by(|(pair_a, count_a), (pair_b, count_b)| {
+            count_a.cmp(count_b).then_with(|| {
+                let a0 = &vocab[pair_a[0] as usize];
+                let a1 = &vocab[pair_a[1] as usize];
+                let b0 = &vocab[pair_b[0] as usize];
+                let b1 = &vocab[pair_b[1] as usize];
+
+                cmp_tuple((a0, a1), (b0, b1))
+            })
+        })
         .map(|(pair, _count)| *pair)
 }
 
@@ -384,7 +398,7 @@ pub fn train_bpe(
             break;
         }
 
-        let pair = get_largest_pair(&all_pairs.unwrap());
+        let pair = get_largest_pair(&all_pairs.unwrap(), &vocab);
         if pair.is_none() {
             // nothing found, shouldn't be here
             break;
@@ -498,6 +512,7 @@ mod tests {
 
     #[test]
     fn test_largest_pair() {
+        let vocab = init_vocab();
         let mut count_map: HashMap<[u16; 2], usize> = HashMap::new();
 
         count_map.insert(['l' as u16, 'o' as u16], 7);
@@ -512,7 +527,7 @@ mod tests {
         count_map.insert(['n' as u16, 'e' as u16], 6);
         count_map.insert(['e' as u16, 'w' as u16], 6);
 
-        let largest = get_largest_pair(&count_map);
+        let largest = get_largest_pair(&count_map, &vocab);
         assert_eq!(largest, Some(['s' as u16, 't' as u16]));
     }
 
@@ -552,5 +567,21 @@ mod tests {
         assert_eq!(result.merges[0], (b"a".to_vec(), b"a".to_vec()));
         assert_eq!(result.merges[1], (b"aa".to_vec(), b"a".to_vec()));
         assert_eq!(result.merges[2], (b"aaa".to_vec(), b"b".to_vec()));
+    }
+
+    #[test]
+    fn test_cmp_tuple() {
+        let data: Vec<(Vec<u8>, Vec<u8>)> = vec![
+            (vec![65], vec![66]),       // A B
+            (vec![65], vec![67]),       // A C
+            (vec![66], b"ZZ".to_vec()), // B ZZ
+            (vec![66, 65], vec![65]),   // BA A
+        ];
+
+        let max = data
+            .iter()
+            .max_by(|a, b| cmp_tuple((&a.0, &a.1), (&b.0, &b.1)))
+            .cloned();
+        assert_eq!(max, Some((vec![66, 65], vec![65])));
     }
 }
