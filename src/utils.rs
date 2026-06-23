@@ -240,7 +240,7 @@ pub fn build_token_freq_map(
     })
 }
 
-fn convert_freq_map_to_u16(map: HashMap<Vec<u8>, usize>) -> HashMap<Vec<u16>, usize> {
+pub fn convert_freq_map_to_u16(map: HashMap<Vec<u8>, usize>) -> HashMap<Vec<u16>, usize> {
     map.into_iter()
         .map(|(token, count)| (token.into_iter().map(|b| b as u16).collect(), count))
         .collect()
@@ -265,7 +265,7 @@ fn count_pairs_internal(all_pairs: &[(&[u16], usize)]) -> HashMap<[u16; 2], usiz
 fn count_pairs(
     map: &HashMap<Vec<u16>, usize>,
     threads: usize,
-) -> Result<HashMap<[u16; 2], usize>, CustomError> {
+) -> Result<Option<HashMap<[u16; 2], usize>>, CustomError> {
     let mut all_pairs: Vec<(&[u16], usize)> = Vec::new();
     for (k, v) in map {
         if k.len() >= 2 {
@@ -274,34 +274,35 @@ fn count_pairs(
     }
 
     if all_pairs.is_empty() {
-        // TODO: should stop counting
-        return Ok(HashMap::new());
+        return Ok(None);
     }
 
     if threads == 1 {
-        Ok(count_pairs_internal(&all_pairs))
+        Ok(Some(count_pairs_internal(&all_pairs)))
     } else {
         let slices = split_indices(all_pairs.len(), threads);
 
-        thread::scope(|scope| -> Result<HashMap<[u16; 2], usize>, CustomError> {
-            let mut handles = Vec::new();
-            for (s, e) in slices {
-                let pair_slice = &all_pairs[s..e];
-                handles.push(scope.spawn(move || -> HashMap<[u16; 2], usize> {
-                    count_pairs_internal(pair_slice)
-                }));
-            }
-
-            let mut total_count = HashMap::<[u16; 2], usize>::new();
-            for handle in handles {
-                let thread_count = handle.join().map_err(|_| CustomError::ThreadPanic)?;
-                for (k, v) in thread_count {
-                    *total_count.entry(k).or_insert(0) += v;
+        thread::scope(
+            |scope| -> Result<Option<HashMap<[u16; 2], usize>>, CustomError> {
+                let mut handles = Vec::new();
+                for (s, e) in slices {
+                    let pair_slice = &all_pairs[s..e];
+                    handles.push(scope.spawn(move || -> HashMap<[u16; 2], usize> {
+                        count_pairs_internal(pair_slice)
+                    }));
                 }
-            }
 
-            Ok(total_count)
-        })
+                let mut total_count = HashMap::<[u16; 2], usize>::new();
+                for handle in handles {
+                    let thread_count = handle.join().map_err(|_| CustomError::ThreadPanic)?;
+                    for (k, v) in thread_count {
+                        *total_count.entry(k).or_insert(0) += v;
+                    }
+                }
+
+                Ok(Some(total_count))
+            },
+        )
     }
 }
 
@@ -310,6 +311,95 @@ fn get_largest_pair(count_map: &HashMap<[u16; 2], usize>) -> Option<[u16; 2]> {
         .iter()
         .max_by_key(|(pair, count)| (*count, *pair))
         .map(|(pair, _count)| *pair)
+}
+
+fn replace_pair_in_token(token: &mut Vec<u16>, pair: &[u16; 2], new_id: u16) {
+    let mut read = 0;
+    let mut write = 0;
+
+    while read < token.len() {
+        if read + 1 < token.len() && token[read] == pair[0] && token[read + 1] == pair[1] {
+            token[write] = new_id;
+            read += 2;
+        } else {
+            token[write] = token[read];
+            read += 1;
+        }
+        write += 1;
+    }
+
+    token.truncate(write);
+}
+
+fn replace_pair_in_freq_map(
+    freq_map: HashMap<Vec<u16>, usize>,
+    pair: &[u16; 2],
+    new_id: u16,
+    threads: usize,
+) -> HashMap<Vec<u16>, usize> {
+    let mut entries: Vec<(Vec<u16>, usize)> = freq_map.into_iter().collect();
+    if entries.is_empty() {
+        return HashMap::new();
+    }
+
+    let threads = threads.clamp(1, entries.len());
+    let chunk_size = entries.len().div_ceil(threads);
+
+    thread::scope(|scope| {
+        for entries in entries.chunks_mut(chunk_size) {
+            scope.spawn(move || {
+                for (token, _count) in entries {
+                    replace_pair_in_token(token, pair, new_id);
+                }
+            });
+        }
+    });
+
+    entries.into_iter().collect()
+}
+
+fn init_vocab() -> Vec<Vec<u8>> {
+    (0..=255).map(|i| vec![i]).collect()
+}
+
+pub struct BpeTrainingResult {
+    pub vocab: Vec<Vec<u8>>,
+    pub merges: Vec<(Vec<u8>, Vec<u8>)>,
+}
+
+pub fn train_bpe(
+    mut freq_map: HashMap<Vec<u16>, usize>,
+    max_vocab_size: usize,
+    threads: usize,
+) -> Result<BpeTrainingResult, CustomError> {
+    let mut vocab = init_vocab();
+    let mut merges: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+
+    let largest_idx = (max_vocab_size.min(0x10000) - 1) as u16;
+
+    for idx in 256..=largest_idx {
+        let all_pairs = count_pairs(&freq_map, threads)?;
+        if all_pairs.is_none() {
+            // nothing to be merged
+            break;
+        }
+
+        let pair = get_largest_pair(&all_pairs.unwrap());
+        if pair.is_none() {
+            // nothing found, shouldn't be here
+            break;
+        }
+
+        let pair = pair.unwrap();
+        freq_map = replace_pair_in_freq_map(freq_map, &pair, idx, threads);
+        let a = vocab[pair[0] as usize].clone();
+        let b = vocab[pair[1] as usize].clone();
+        let c: Vec<u8> = a.iter().chain(b.iter()).copied().collect();
+        vocab.push(c);
+        merges.push((a, b));
+    }
+
+    Ok(BpeTrainingResult { vocab, merges })
 }
 
 #[cfg(test)]
@@ -424,5 +514,43 @@ mod tests {
 
         let largest = get_largest_pair(&count_map);
         assert_eq!(largest, Some(['s' as u16, 't' as u16]));
+    }
+
+    #[test]
+    fn test_train_bpe() {
+        let text = b"aaabdaaabac";
+        let text_vec: Vec<u16> = text.iter().map(|&b| b as u16).collect();
+        let mut freq_map: HashMap<Vec<u16>, usize> = HashMap::new();
+        freq_map.insert(text_vec, 1);
+
+        // 1
+        let x = freq_map.clone();
+        let result = train_bpe(x, 256 + 1, 1).expect("shouln't throw error");
+        assert_eq!(result.vocab.len(), 256 + 1);
+        assert_eq!(result.vocab[256 + 0], b"aa".to_vec());
+        assert_eq!(result.merges.len(), 1);
+        assert_eq!(result.merges[0], (b"a".to_vec(), b"a".to_vec()));
+
+        // 2
+        let x = freq_map.clone();
+        let result = train_bpe(x, 256 + 2, 1).expect("shouln't throw error");
+        assert_eq!(result.vocab.len(), 256 + 2);
+        assert_eq!(result.vocab[256 + 0], b"aa".to_vec());
+        assert_eq!(result.vocab[256 + 1], b"aaa".to_vec());
+        assert_eq!(result.merges.len(), 2);
+        assert_eq!(result.merges[0], (b"a".to_vec(), b"a".to_vec()));
+        assert_eq!(result.merges[1], (b"aa".to_vec(), b"a".to_vec()));
+
+        // 3
+        let x = freq_map.clone();
+        let result = train_bpe(x, 256 + 3, 1).expect("shouln't throw error");
+        assert_eq!(result.vocab.len(), 256 + 3);
+        assert_eq!(result.vocab[256 + 0], b"aa".to_vec());
+        assert_eq!(result.vocab[256 + 1], b"aaa".to_vec());
+        assert_eq!(result.vocab[256 + 2], b"aaab".to_vec());
+        assert_eq!(result.merges.len(), 3);
+        assert_eq!(result.merges[0], (b"a".to_vec(), b"a".to_vec()));
+        assert_eq!(result.merges[1], (b"aa".to_vec(), b"a".to_vec()));
+        assert_eq!(result.merges[2], (b"aaa".to_vec(), b"b".to_vec()));
     }
 }
