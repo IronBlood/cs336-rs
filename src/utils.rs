@@ -373,7 +373,7 @@ fn replace_pair_in_freq_map(
 }
 
 fn init_vocab() -> Vec<Vec<u8>> {
-    (0..=255).map(|i| vec![i]).collect()
+    (0..=u8::MAX).map(|i| vec![i]).collect()
 }
 
 pub struct BpeTrainingResult {
@@ -384,12 +384,13 @@ pub struct BpeTrainingResult {
 pub fn train_bpe(
     mut freq_map: HashMap<Vec<u16>, usize>,
     max_vocab_size: usize,
+    special_tokens: &[String],
     threads: usize,
 ) -> Result<BpeTrainingResult, CustomError> {
     let mut vocab = init_vocab();
     let mut merges: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
 
-    let largest_idx = (max_vocab_size.min(0x10000) - 1) as u16;
+    let largest_idx = (max_vocab_size.min(0x10000) - 1 - special_tokens.len()) as u16;
 
     for idx in 256..=largest_idx {
         let all_pairs = count_pairs(&freq_map, threads)?;
@@ -537,10 +538,11 @@ mod tests {
         let text_vec: Vec<u16> = text.iter().map(|&b| b as u16).collect();
         let mut freq_map: HashMap<Vec<u16>, usize> = HashMap::new();
         freq_map.insert(text_vec, 1);
+        let special_tokens = Vec::new();
 
         // 1
         let x = freq_map.clone();
-        let result = train_bpe(x, 256 + 1, 1).expect("shouln't throw error");
+        let result = train_bpe(x, 256 + 1, &special_tokens, 1).expect("shouln't throw error");
         assert_eq!(result.vocab.len(), 256 + 1);
         assert_eq!(result.vocab[256 + 0], b"aa".to_vec());
         assert_eq!(result.merges.len(), 1);
@@ -548,7 +550,7 @@ mod tests {
 
         // 2
         let x = freq_map.clone();
-        let result = train_bpe(x, 256 + 2, 1).expect("shouln't throw error");
+        let result = train_bpe(x, 256 + 2, &special_tokens, 1).expect("shouln't throw error");
         assert_eq!(result.vocab.len(), 256 + 2);
         assert_eq!(result.vocab[256 + 0], b"aa".to_vec());
         assert_eq!(result.vocab[256 + 1], b"aaa".to_vec());
@@ -558,7 +560,7 @@ mod tests {
 
         // 3
         let x = freq_map.clone();
-        let result = train_bpe(x, 256 + 3, 1).expect("shouln't throw error");
+        let result = train_bpe(x, 256 + 3, &special_tokens, 1).expect("shouln't throw error");
         assert_eq!(result.vocab.len(), 256 + 3);
         assert_eq!(result.vocab[256 + 0], b"aa".to_vec());
         assert_eq!(result.vocab[256 + 1], b"aaa".to_vec());
