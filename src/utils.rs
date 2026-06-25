@@ -304,9 +304,7 @@ fn count_pairs(
                 let mut total_count = HashMap::<u32, usize>::new();
                 for handle in handles {
                     let thread_count = handle.join().map_err(|_| CustomError::ThreadPanic)?;
-                    for (k, v) in thread_count {
-                        *total_count.entry(k).or_insert(0) += v;
-                    }
+                    merge_count_map(&mut total_count, thread_count, 1);
                 }
 
                 Ok(Some(total_count))
@@ -411,12 +409,8 @@ fn replace_pair_in_freq_map(
                 let mut thread_add: HashMap<u32, usize> = HashMap::new();
                 for (token, count) in entries {
                     let local_delta = replace_pair_in_token(token, pair, new_id);
-                    for (k, v) in local_delta.del {
-                        *thread_del.entry(k).or_insert(0) += *count * v;
-                    }
-                    for (k, v) in local_delta.add {
-                        *thread_add.entry(k).or_insert(0) += *count * v;
-                    }
+                    merge_count_map(&mut thread_del, local_delta.del, *count);
+                    merge_count_map(&mut thread_add, local_delta.add, *count);
                 }
                 return TokenDelta {
                     del: thread_del,
@@ -427,12 +421,8 @@ fn replace_pair_in_freq_map(
 
         for handle in handles {
             let thread_delta = handle.join().map_err(|_| CustomError::ThreadPanic)?;
-            for (k, v) in thread_delta.del {
-                *total_del.entry(k).or_insert(0) += v;
-            }
-            for (k, v) in thread_delta.add {
-                *total_add.entry(k).or_insert(0) += v;
-            }
+            merge_count_map(&mut total_del, thread_delta.del, 1);
+            merge_count_map(&mut total_add, thread_delta.add, 1);
         }
 
         Ok(TokenDelta {
@@ -521,6 +511,18 @@ pub fn train_bpe(
     }
 
     Ok(BpeTrainingResult { vocab, merges })
+}
+
+/// Adds counts from `source` into `target`.
+///
+/// Each source value is multiplied by `multiplier` before being added.
+fn merge_count_map<T>(target: &mut HashMap<T, usize>, source: HashMap<T, usize>, multiplier: usize)
+where
+    T: Eq + std::hash::Hash,
+{
+    for (k, v) in source {
+        *target.entry(k).or_insert(0) += v * multiplier;
+    }
 }
 
 #[cfg(test)]
