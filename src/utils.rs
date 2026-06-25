@@ -334,19 +334,23 @@ fn get_largest_pair(count_map: &HashMap<u32, usize>, vocab: &[Vec<u8>]) -> Optio
         .map(|(pair, _count)| unpack_pair(*pair))
 }
 
-struct TokenDelta {
-    /// to be deleted from all_pairs
-    del: HashMap<u32, usize>,
-    // to be added to all_pairs
-    add: HashMap<u32, usize>,
+/// Pair-count changes produced by applying one BPE merge.
+///
+/// Whne a pair `(a, b)` is replaced by a new token `x`, only neighboring pairs
+/// around each replacement site change. `removed` records pair counts that
+/// should be subtracted from the global pair-count map, and `added` records
+/// pair counts that should be added.
+struct PairCountDelta {
+    removed: HashMap<u32, usize>,
+    added: HashMap<u32, usize>,
 }
 
-fn replace_pair_in_token(token: &mut Vec<u16>, pair: &[u16; 2], new_id: u16) -> TokenDelta {
+fn replace_pair_in_token(token: &mut Vec<u16>, pair: &[u16; 2], new_id: u16) -> PairCountDelta {
     let mut read = 0;
     let mut write = 0;
 
-    let mut del: HashMap<u32, usize> = HashMap::new();
-    let mut add: HashMap<u32, usize> = HashMap::new();
+    let mut removed: HashMap<u32, usize> = HashMap::new();
+    let mut added: HashMap<u32, usize> = HashMap::new();
 
     while read < token.len() {
         if read + 1 < token.len() && token[read] == pair[0] && token[read + 1] == pair[1] {
@@ -354,19 +358,19 @@ fn replace_pair_in_token(token: &mut Vec<u16>, pair: &[u16; 2], new_id: u16) -> 
             // and what pair needs to be added
             if write > 0 {
                 let prev = pack_pair(token[write - 1], pair[0]);
-                *del.entry(prev).or_insert(0) += 1;
+                *removed.entry(prev).or_insert(0) += 1;
                 let prev = pack_pair(token[write - 1], new_id);
-                *add.entry(prev).or_insert(0) += 1;
+                *added.entry(prev).or_insert(0) += 1;
             }
             if read + 2 < token.len() {
                 let next = pack_pair(pair[1], token[read + 2]);
-                *del.entry(next).or_insert(0) += 1;
+                *removed.entry(next).or_insert(0) += 1;
                 let next = pack_pair(new_id, token[read + 2]);
-                *add.entry(next).or_insert(0) += 1;
+                *added.entry(next).or_insert(0) += 1;
             }
 
             let curr = pack_pair(pair[0], pair[1]);
-            *del.entry(curr).or_insert(0) += 1;
+            *removed.entry(curr).or_insert(0) += 1;
 
             token[write] = new_id;
             read += 2;
@@ -379,7 +383,7 @@ fn replace_pair_in_token(token: &mut Vec<u16>, pair: &[u16; 2], new_id: u16) -> 
 
     token.truncate(write);
 
-    TokenDelta { del, add }
+    PairCountDelta { removed, added }
 }
 
 fn replace_pair_in_freq_map(
@@ -387,56 +391,61 @@ fn replace_pair_in_freq_map(
     pair: &[u16; 2],
     new_id: u16,
     threads: usize,
-) -> Result<TokenDelta, CustomError> {
-    let mut total_del: HashMap<u32, usize> = HashMap::new();
-    let mut total_add: HashMap<u32, usize> = HashMap::new();
+) -> Result<PairCountDelta, CustomError> {
+    let mut total_removed: HashMap<u32, usize> = HashMap::new();
+    let mut total_added: HashMap<u32, usize> = HashMap::new();
 
     if entries.is_empty() {
-        return Ok(TokenDelta {
-            del: total_del,
-            add: total_add,
+        return Ok(PairCountDelta {
+            removed: total_removed,
+            added: total_added,
         });
     }
 
     let threads = threads.clamp(1, entries.len());
     let chunk_size = entries.len().div_ceil(threads);
 
-    thread::scope(|scope| -> Result<TokenDelta, CustomError> {
+    thread::scope(|scope| -> Result<PairCountDelta, CustomError> {
         let mut handles = vec![];
         for entries in entries.chunks_mut(chunk_size) {
-            handles.push(scope.spawn(move || -> TokenDelta {
-                let mut thread_del: HashMap<u32, usize> = HashMap::new();
-                let mut thread_add: HashMap<u32, usize> = HashMap::new();
+            handles.push(scope.spawn(move || -> PairCountDelta {
+                let mut thread_removed: HashMap<u32, usize> = HashMap::new();
+                let mut thread_added: HashMap<u32, usize> = HashMap::new();
                 for (token, count) in entries {
                     let local_delta = replace_pair_in_token(token, pair, new_id);
-                    merge_count_map(&mut thread_del, local_delta.del, *count);
-                    merge_count_map(&mut thread_add, local_delta.add, *count);
+                    merge_count_map(&mut thread_removed, local_delta.removed, *count);
+                    merge_count_map(&mut thread_added, local_delta.added, *count);
                 }
-                TokenDelta {
-                    del: thread_del,
-                    add: thread_add,
+                PairCountDelta {
+                    removed: thread_removed,
+                    added: thread_added,
                 }
             }));
         }
 
         for handle in handles {
             let thread_delta = handle.join().map_err(|_| CustomError::ThreadPanic)?;
-            merge_count_map(&mut total_del, thread_delta.del, 1);
-            merge_count_map(&mut total_add, thread_delta.add, 1);
+            merge_count_map(&mut total_removed, thread_delta.removed, 1);
+            merge_count_map(&mut total_added, thread_delta.added, 1);
         }
 
-        Ok(TokenDelta {
-            del: total_del,
-            add: total_add,
+        Ok(PairCountDelta {
+            removed: total_removed,
+            added: total_added,
         })
     })
 }
 
-fn apply_count_delta(all_pairs: &mut HashMap<u32, usize>, delta: TokenDelta) {
-    let all_keys: HashSet<u32> = delta.del.keys().chain(delta.add.keys()).cloned().collect();
+fn apply_count_delta(all_pairs: &mut HashMap<u32, usize>, delta: PairCountDelta) {
+    let all_keys: HashSet<u32> = delta
+        .removed
+        .keys()
+        .chain(delta.added.keys())
+        .cloned()
+        .collect();
     for k in all_keys {
-        let del = delta.del.get(&k).copied().unwrap_or(0);
-        let add = delta.add.get(&k).copied().unwrap_or(0);
+        let del = delta.removed.get(&k).copied().unwrap_or(0);
+        let add = delta.added.get(&k).copied().unwrap_or(0);
 
         if del == add {
             // do nothing
