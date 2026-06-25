@@ -538,30 +538,29 @@ fn replace_pair_in_freq_map(
     }
 }
 
-fn update_count(mut all_pairs: HashMap<u32, usize>, delta: TokenDelta) -> HashMap<u32, usize> {
+fn apply_count_delta(all_pairs: &mut HashMap<u32, usize>, delta: TokenDelta) {
     let all_keys: HashSet<u32> = delta.del.keys().chain(delta.add.keys()).cloned().collect();
     for k in all_keys {
-        let del = delta.del.get(&k);
-        let add = delta.add.get(&k);
+        let del = delta.del.get(&k).copied().unwrap_or(0);
+        let add = delta.add.get(&k).copied().unwrap_or(0);
 
-        if let Some(&del) = del
-            && let Some(&add) = add
-        {
-            if del == add {
-                // do nothing
-            } else if del > add {
-                *all_pairs.entry(k).or_insert(0) -= del - add;
-            } else {
-                *all_pairs.entry(k).or_insert(0) += add - del;
+        if del == add {
+            // do nothing
+        } else if del > add {
+            let count = all_pairs
+                .get_mut(&k)
+                .expect("pair count must exist before deletion");
+            *count = count
+                .checked_sub(del - add)
+                .expect("pair count deletion underflow");
+
+            if *count == 0 {
+                all_pairs.remove(&k);
             }
-        } else if let Some(del) = del {
-            *all_pairs.entry(k).or_insert(0) -= *del;
-        } else if let Some(add) = add {
-            *all_pairs.entry(k).or_insert(0) += *add;
+        } else {
+            *all_pairs.entry(k).or_insert(0) += add - del;
         }
     }
-
-    all_pairs.into_iter().filter(|(_k, v)| *v != 0).collect()
 }
 
 fn init_vocab() -> Vec<Vec<u8>> {
@@ -630,7 +629,7 @@ pub fn train_bpe(
         vocab_time += t.elapsed();
 
         let t = Instant::now();
-        all_pairs = update_count(all_pairs, delta);
+        apply_count_delta(&mut all_pairs, delta);
         zip_time += t.elapsed();
     }
 
