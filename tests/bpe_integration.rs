@@ -5,6 +5,7 @@ use std::{
     fs, io,
     path::PathBuf,
     process, thread,
+    time::Instant,
 };
 
 use cs336_rs::utils::*;
@@ -94,6 +95,24 @@ fn load_reference_vocab(
         .collect();
 
     Ok(reference_vocab)
+}
+
+#[test]
+fn test_train_bpe_speed() {
+    let input_path = "tests/fixtures/corpus.en";
+    let input_path = fs::canonicalize(input_path).unwrap_or_else(|err| {
+        eprintln!("invalid file path {input_path}: {err}",);
+        process::exit(1);
+    });
+
+    let start_time = Instant::now();
+    let (_, _) = bpe(input_path, 500, vec!["<|endoftext|>".to_string()]);
+    let elapsed = start_time.elapsed();
+
+    assert!(
+        elapsed.as_secs_f64() < 1.5,
+        "BPE training took {elapsed:?}, expected less than 1.5 seconds"
+    );
 }
 
 #[test]
