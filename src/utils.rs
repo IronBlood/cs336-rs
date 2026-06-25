@@ -412,10 +412,10 @@ fn replace_pair_in_freq_map(
                     merge_count_map(&mut thread_del, local_delta.del, *count);
                     merge_count_map(&mut thread_add, local_delta.add, *count);
                 }
-                return TokenDelta {
+                TokenDelta {
                     del: thread_del,
                     add: thread_add,
-                };
+                }
             }));
         }
 
