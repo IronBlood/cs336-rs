@@ -1,6 +1,5 @@
 use crate::error::CustomError;
 use crate::regex::{Regex, escape_literal};
-use std::time::{Duration, Instant};
 use std::{
     collections::{HashMap, HashSet},
     thread,
@@ -487,14 +486,6 @@ pub fn train_bpe(
     let mut merges: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
     let mut entries: Vec<(Vec<u16>, usize)> = freq_map.into_iter().collect();
 
-    // TODO: delete these lines
-    let mut count_pairs_time = Duration::ZERO;
-    let mut largest_pair_time = Duration::ZERO;
-    let mut replace_time = Duration::ZERO;
-    let mut zip_time = Duration::ZERO;
-    let mut vocab_time = Duration::ZERO;
-
-    let t = Instant::now();
     // TODO
     let all_pairs = count_pairs(&entries, threads)?;
     if all_pairs.is_none() {
@@ -502,7 +493,6 @@ pub fn train_bpe(
     }
 
     let mut all_pairs = all_pairs.unwrap();
-    count_pairs_time += t.elapsed();
 
     let largest_idx = (max_vocab_size.min(0x10000) - 1 - special_tokens.len()) as u16;
 
@@ -512,39 +502,24 @@ pub fn train_bpe(
             break;
         }
 
-        let t = Instant::now();
         let pair = get_largest_pair(&all_pairs, &vocab);
-        largest_pair_time += t.elapsed();
         if pair.is_none() {
             // nothing found, shouldn't be here
             break;
         }
 
         let pair = pair.unwrap();
-        let t = Instant::now();
         let delta = replace_pair_in_freq_map(&mut entries, &pair, idx, threads)?;
-        replace_time += t.elapsed();
 
-        let t = Instant::now();
         let a = vocab[pair[0] as usize].clone();
         let b = vocab[pair[1] as usize].clone();
         let c: Vec<u8> = a.iter().chain(b.iter()).copied().collect();
         vocab.push(c);
         merges.push((a, b));
-        vocab_time += t.elapsed();
 
-        let t = Instant::now();
         apply_count_delta(&mut all_pairs, delta);
-        zip_time += t.elapsed();
     }
 
-    println!("------");
-    println!("count: {:.3}s", count_pairs_time.as_secs_f64());
-    println!("largest pair: {:.3}s", largest_pair_time.as_secs_f64());
-    println!("replace: {:.3}s", replace_time.as_secs_f64());
-    println!("zip: {:.3}s", zip_time.as_secs_f64());
-    println!("vocab: {:.3}s", vocab_time.as_secs_f64());
-    println!("------");
     Ok(BpeTrainingResult { vocab, merges })
 }
 
