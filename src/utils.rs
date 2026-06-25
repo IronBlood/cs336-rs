@@ -346,6 +346,7 @@ struct PairCountDelta {
 }
 
 fn replace_pair_in_token(token: &mut Vec<u16>, pair: &[u16; 2], new_id: u16) -> PairCountDelta {
+    // a two-pointer in-place approach
     let mut read = 0;
     let mut write = 0;
 
@@ -354,21 +355,22 @@ fn replace_pair_in_token(token: &mut Vec<u16>, pair: &[u16; 2], new_id: u16) -> 
 
     while read < token.len() {
         if read + 1 < token.len() && token[read] == pair[0] && token[read + 1] == pair[1] {
-            // this block means the pair exists, we need to calculate what pair need to be removed,
-            // and what pair needs to be added
+            // Imagine we are going to replace `A B` from `[L] A B [R}` with `X`, where `L` and `R` are optional.
+            // This block means `L` exists, so we need to remove `LA`, then add `LX`
             if write > 0 {
                 let prev = pack_pair(token[write - 1], pair[0]);
                 *removed.entry(prev).or_insert(0) += 1;
                 let prev = pack_pair(token[write - 1], new_id);
                 *added.entry(prev).or_insert(0) += 1;
             }
+            // This block means `R` exists, so we need to remove `BR`, then add `XR`
             if read + 2 < token.len() {
                 let next = pack_pair(pair[1], token[read + 2]);
                 *removed.entry(next).or_insert(0) += 1;
                 let next = pack_pair(new_id, token[read + 2]);
                 *added.entry(next).or_insert(0) += 1;
             }
-
+            // Now to remove`AB` itself
             let curr = pack_pair(pair[0], pair[1]);
             *removed.entry(curr).or_insert(0) += 1;
 
@@ -381,6 +383,7 @@ fn replace_pair_in_token(token: &mut Vec<u16>, pair: &[u16; 2], new_id: u16) -> 
         write += 1;
     }
 
+    // finally discard the rest
     token.truncate(write);
 
     PairCountDelta { removed, added }
