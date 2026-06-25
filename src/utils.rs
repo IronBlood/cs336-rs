@@ -304,7 +304,7 @@ fn count_pairs(
                 let mut total_count = HashMap::<u32, usize>::new();
                 for handle in handles {
                     let thread_count = handle.join().map_err(|_| CustomError::ThreadPanic)?;
-                    merge_count_map(&mut total_count, thread_count, 1);
+                    merge_count_map(&mut total_count, thread_count);
                 }
 
                 Ok(Some(total_count))
@@ -426,8 +426,8 @@ fn replace_pair_in_freq_map(
 
         for handle in handles {
             let thread_delta = handle.join().map_err(|_| CustomError::ThreadPanic)?;
-            merge_count_map(&mut total_removed, thread_delta.removed, 1);
-            merge_count_map(&mut total_added, thread_delta.added, 1);
+            merge_count_map(&mut total_removed, thread_delta.removed);
+            merge_count_map(&mut total_added, thread_delta.added);
         }
 
         Ok(PairCountDelta {
@@ -524,14 +524,12 @@ pub fn train_bpe(
 }
 
 /// Adds counts from `source` into `target`.
-///
-/// Each source value is multiplied by `multiplier` before being added.
-fn merge_count_map<T>(target: &mut HashMap<T, usize>, source: HashMap<T, usize>, multiplier: usize)
+fn merge_count_map<T>(target: &mut HashMap<T, usize>, source: HashMap<T, usize>)
 where
     T: Eq + std::hash::Hash,
 {
     for (k, v) in source {
-        *target.entry(k).or_insert(0) += v * multiplier;
+        *target.entry(k).or_insert(0) += v;
     }
 }
 
