@@ -9,27 +9,6 @@ pub type Span = (usize, usize);
 pub type WordFreqMap = HashMap<Vec<u8>, usize>;
 type BorrowedWordFreqMap<'a> = HashMap<&'a [u8], usize>;
 
-fn split_indices(size: usize, threads: usize) -> Vec<Span> {
-    if size == 0 {
-        return Vec::new();
-    }
-
-    let threads = threads.clamp(1, size);
-    if threads == 1 {
-        return vec![(0, size)];
-    }
-
-    let chunk_size = size.div_ceil(threads);
-    (0..threads)
-        .map(|idx| {
-            let start = idx * chunk_size;
-            let end = ((idx + 1) * chunk_size).min(size);
-            (start, end)
-        })
-        .filter(|(start, end)| start < end)
-        .collect()
-}
-
 fn find_special_tokens(chunk: &[u8], special_tokens_bytes: &[Vec<u8>]) -> Option<usize> {
     let first_offset: Option<usize> = special_tokens_bytes
         .iter()
@@ -194,19 +173,17 @@ pub fn build_token_freq_map(
 
     let re_match = Regex::new(regex_str)?;
 
-    let chunks = split_indices(all_pieces.len(), threads);
-
     thread::scope(|scope| -> Result<WordFreqMap, CustomError> {
         let mut handles = Vec::new();
         let re = &re_match;
+        let threads = threads.clamp(1, all_pieces.len());
+        let chunk_size = all_pieces.len().div_ceil(threads);
 
-        for (span_start, span_end) in chunks {
+        for piece_chunk in all_pieces.chunks(chunk_size) {
             handles.push(
                 scope.spawn(move || -> Result<BorrowedWordFreqMap<'_>, CustomError> {
                     let mut local_freq_map: BorrowedWordFreqMap<'_> = HashMap::new();
-                    for span_idx in span_start..span_end {
-                        let piece: Span = all_pieces[span_idx];
-                        let (s, e) = piece;
+                    for &(s, e) in piece_chunk {
                         let chunk = &content[s..e];
                         let text = str::from_utf8(chunk)?;
 
@@ -286,16 +263,16 @@ fn count_pairs(
         return Ok(None);
     }
 
+    let threads = threads.clamp(1, all_pairs.len());
+    let chunk_size = all_pairs.len().div_ceil(threads);
+
     if threads == 1 {
         Ok(Some(count_pairs_internal(&all_pairs)))
     } else {
-        let slices = split_indices(all_pairs.len(), threads);
-
         thread::scope(
             |scope| -> Result<Option<HashMap<u32, usize>>, CustomError> {
                 let mut handles = Vec::new();
-                for (s, e) in slices {
-                    let pair_slice = &all_pairs[s..e];
+                for pair_slice in all_pairs.chunks(chunk_size) {
                     handles.push(scope.spawn(move || -> HashMap<u32, usize> {
                         count_pairs_internal(pair_slice)
                     }));
