@@ -161,66 +161,73 @@ pub fn find_pretoken_spans(
     Ok(all_pieces)
 }
 
-pub fn build_token_freq_map(
-    content: &[u8],
+/// This function builds a hashmap of word-count to reduce the time for BPE training.
+///
+/// There are a lot of repeating words in the original content. When doing BPE, we need
+/// to count every byte pairs. There are lots of repeating words, so counting once then
+/// multiplied by how many time this word appears, would save a lot of time. Even during
+/// the process of merging, for example in the word `ABCDE` when `BC` is replaced by `X`
+/// and making a new word `AXDE`, it is still unique, won't be turned to another existing
+/// key, thus the pair counting will still be correct.
+pub fn build_token_freq_map<'content>(
+    content: &'content [u8],
     all_pieces: &[Span],
     threads: usize,
     regex_str: &str,
-) -> Result<HashMap<Vec<u8>, usize>, CustomError> {
+) -> Result<HashMap<&'content [u8], usize>, CustomError> {
     if all_pieces.is_empty() {
         return Ok(HashMap::new());
     }
 
     let re_match = Regex::new(regex_str)?;
 
-    thread::scope(|scope| -> Result<WordFreqMap, CustomError> {
-        let mut handles = Vec::new();
-        let re = &re_match;
-        let threads = threads.clamp(1, all_pieces.len());
-        let chunk_size = all_pieces.len().div_ceil(threads);
+    thread::scope(
+        |scope| -> Result<HashMap<&'content [u8], usize>, CustomError> {
+            let mut handles = Vec::new();
+            let re = &re_match;
+            let threads = threads.clamp(1, all_pieces.len());
+            let chunk_size = all_pieces.len().div_ceil(threads);
 
-        for piece_chunk in all_pieces.chunks(chunk_size) {
-            handles.push(
-                scope.spawn(move || -> Result<BorrowedWordFreqMap<'_>, CustomError> {
-                    let mut local_freq_map: BorrowedWordFreqMap<'_> = HashMap::new();
-                    for &(s, e) in piece_chunk {
-                        let chunk = &content[s..e];
-                        let text = str::from_utf8(chunk)?;
+            for piece_chunk in all_pieces.chunks(chunk_size) {
+                handles.push(scope.spawn(
+                    move || -> Result<BorrowedWordFreqMap<'_>, CustomError> {
+                        let mut local_freq_map: BorrowedWordFreqMap<'_> = HashMap::new();
+                        for &(s, e) in piece_chunk {
+                            let chunk = &content[s..e];
+                            let text = str::from_utf8(chunk)?;
 
-                        let text_offset = s;
-                        for mat in re.find_iter(text)? {
-                            let mat = mat?;
-                            let matched_start = text_offset + mat.start();
-                            let matched_end = text_offset + mat.end();
-                            let matched_bytes = &content[matched_start..matched_end];
-                            *local_freq_map.entry(matched_bytes).or_insert(0) += 1;
+                            let text_offset = s;
+                            for mat in re.find_iter(text)? {
+                                let mat = mat?;
+                                let matched_start = text_offset + mat.start();
+                                let matched_end = text_offset + mat.end();
+                                let matched_bytes = &content[matched_start..matched_end];
+                                *local_freq_map.entry(matched_bytes).or_insert(0) += 1;
+                            }
                         }
-                    }
 
-                    Ok(local_freq_map)
-                }),
-            );
-        }
-
-        let mut freq_map: WordFreqMap = HashMap::new();
-        for handle in handles {
-            let thread_freq_map = handle.join().map_err(|_| CustomError::ThreadPanic)??;
-            for (token, count) in thread_freq_map {
-                if let Some(total) = freq_map.get_mut(token) {
-                    *total += count;
-                } else {
-                    freq_map.insert(token.to_vec(), count);
-                }
+                        Ok(local_freq_map)
+                    },
+                ));
             }
-        }
 
-        Ok(freq_map)
-    })
+            let mut freq_map: BorrowedWordFreqMap<'_> = HashMap::new();
+            for handle in handles {
+                let thread_freq_map = handle.join().map_err(|_| CustomError::ThreadPanic)??;
+                merge_count_map(&mut freq_map, thread_freq_map);
+            }
+
+            Ok(freq_map)
+        },
+    )
 }
 
-pub fn convert_freq_map_to_u16(map: HashMap<Vec<u8>, usize>) -> HashMap<Vec<u16>, usize> {
+/// This function converts the raw borrowed freq_map to the format (owned u16) used in BPE training.
+///
+/// The raw freq_map might be useful for debugging.
+pub fn convert_freq_map_to_u16(map: BorrowedWordFreqMap<'_>) -> HashMap<Vec<u16>, usize> {
     map.into_iter()
-        .map(|(token, count)| (token.into_iter().map(|b| b as u16).collect(), count))
+        .map(|(token, count)| (token.into_iter().map(|&b| b as u16).collect(), count))
         .collect()
 }
 
