@@ -345,13 +345,16 @@ struct PairCountDelta {
     added: HashMap<u32, usize>,
 }
 
-fn replace_pair_in_token(token: &mut Vec<u16>, pair: &[u16; 2], new_id: u16) -> PairCountDelta {
+fn replace_pair_in_token(
+    token: &mut Vec<u16>,
+    pair: &[u16; 2],
+    new_id: u16,
+    multiplier: usize,
+    count_delta: &mut PairCountDelta,
+) {
     // a two-pointer in-place approach
     let mut read = 0;
     let mut write = 0;
-
-    let mut removed: HashMap<u32, usize> = HashMap::new();
-    let mut added: HashMap<u32, usize> = HashMap::new();
 
     while read < token.len() {
         if read + 1 < token.len() && token[read] == pair[0] && token[read + 1] == pair[1] {
@@ -359,20 +362,20 @@ fn replace_pair_in_token(token: &mut Vec<u16>, pair: &[u16; 2], new_id: u16) -> 
             // This block means `L` exists, so we need to remove `LA`, then add `LX`
             if write > 0 {
                 let prev = pack_pair(token[write - 1], pair[0]);
-                *removed.entry(prev).or_insert(0) += 1;
+                *count_delta.removed.entry(prev).or_insert(0) += multiplier;
                 let prev = pack_pair(token[write - 1], new_id);
-                *added.entry(prev).or_insert(0) += 1;
+                *count_delta.added.entry(prev).or_insert(0) += multiplier;
             }
             // This block means `R` exists, so we need to remove `BR`, then add `XR`
             if read + 2 < token.len() {
                 let next = pack_pair(pair[1], token[read + 2]);
-                *removed.entry(next).or_insert(0) += 1;
+                *count_delta.removed.entry(next).or_insert(0) += multiplier;
                 let next = pack_pair(new_id, token[read + 2]);
-                *added.entry(next).or_insert(0) += 1;
+                *count_delta.added.entry(next).or_insert(0) += multiplier;
             }
             // Now to remove`AB` itself
             let curr = pack_pair(pair[0], pair[1]);
-            *removed.entry(curr).or_insert(0) += 1;
+            *count_delta.removed.entry(curr).or_insert(0) += multiplier;
 
             token[write] = new_id;
             read += 2;
@@ -385,8 +388,6 @@ fn replace_pair_in_token(token: &mut Vec<u16>, pair: &[u16; 2], new_id: u16) -> 
 
     // finally discard the rest
     token.truncate(write);
-
-    PairCountDelta { removed, added }
 }
 
 fn replace_pair_in_freq_map(
@@ -412,17 +413,14 @@ fn replace_pair_in_freq_map(
         let mut handles = vec![];
         for entries in entries.chunks_mut(chunk_size) {
             handles.push(scope.spawn(move || -> PairCountDelta {
-                let mut thread_removed: HashMap<u32, usize> = HashMap::new();
-                let mut thread_added: HashMap<u32, usize> = HashMap::new();
+                let mut thread_count_delta = PairCountDelta {
+                    removed: HashMap::new(),
+                    added: HashMap::new(),
+                };
                 for (token, count) in entries {
-                    let local_delta = replace_pair_in_token(token, pair, new_id);
-                    merge_count_map(&mut thread_removed, local_delta.removed, *count);
-                    merge_count_map(&mut thread_added, local_delta.added, *count);
+                    replace_pair_in_token(token, pair, new_id, *count, &mut thread_count_delta);
                 }
-                PairCountDelta {
-                    removed: thread_removed,
-                    added: thread_added,
-                }
+                thread_count_delta
             }));
         }
 
