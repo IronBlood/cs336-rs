@@ -438,6 +438,22 @@ fn replace_pair_in_freq_map(
 }
 
 fn apply_count_delta(all_pairs: &mut HashMap<u32, usize>, delta: PairCountDelta) {
+    // During the merges, there might be a chance to deal with this sequence:
+    // `[67, 65, 66, 65, 66, 67]` and `[65, 66]` should be replaced by 300u16,
+    // which will finally become: `[67, 300, 300, 67]`.
+    //
+    // The function `replace_pair_in_token` may produce for the first round:
+    // removed: -> [67, 65], [65, 66], [66, 65]
+    // added: -> [67, 300], [300, 65]
+    //                      ~~~~~~~~~
+    //
+    // Then for the second round:
+    // removed: -> [300, 65], [65, 66], [66, 67]
+    //             ~~~~~~~~~
+    //
+    // added: -> [300, 300], [300, 67]
+    //
+    // It will be safer to deal with the diffs
     let all_keys: HashSet<u32> = delta
         .removed
         .keys()
@@ -701,5 +717,38 @@ mod tests {
             .max_by(|a, b| cmp_tuple((&a.0, &a.1), (&b.0, &b.1)))
             .cloned();
         assert_eq!(max, Some((vec![66, 65], vec![65])));
+    }
+
+    #[test]
+    fn test_replace_pair_in_token() {
+        let mut delta = PairCountDelta {
+            removed: HashMap::new(),
+            added: HashMap::new(),
+        };
+        let mut token: Vec<u16> = vec![67, 65, 66, 65, 66, 67];
+        let pair: [u16; 2] = [65, 66];
+        replace_pair_in_token(&mut token, &pair, 300, 1, &mut delta);
+
+        assert_eq!(delta.removed.len(), 5);
+        let removed_entries: [(u32, usize); 5] = [
+            (pack_pair(67, 65), 1),
+            (pack_pair(65, 66), 2),
+            (pack_pair(66, 65), 1),
+            (pack_pair(66, 67), 1),
+            (pack_pair(300, 65), 1),
+        ];
+        for (k, v) in removed_entries {
+            assert_eq!(delta.removed.get(&k), Some(&v));
+        }
+
+        let added_entries: [(u32, usize); 4] = [
+            (pack_pair(67, 300), 1),
+            (pack_pair(300, 65), 1),
+            (pack_pair(300, 300), 1),
+            (pack_pair(300, 67), 1),
+        ];
+        for (k, v) in added_entries {
+            assert_eq!(delta.added.get(&k), Some(&v));
+        }
     }
 }
