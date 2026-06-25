@@ -231,10 +231,12 @@ pub fn convert_freq_map_to_u16(map: BorrowedWordFreqMap<'_>) -> HashMap<Vec<u16>
         .collect()
 }
 
+/// Turning a [u16; 2] to a u32 to be used as the hash key to save time
 fn pack_pair(hi: u16, lo: u16) -> u32 {
     (hi as u32) << 16 | lo as u32
 }
 
+/// extract the internal used u32 form to the original byte pair
 fn unpack_pair(x: u32) -> [u16; 2] {
     [(x >> 16) as u16, x as u16]
 }
@@ -486,7 +488,7 @@ pub fn train_bpe(
     let mut merges: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
     let mut entries: Vec<(Vec<u16>, usize)> = freq_map.into_iter().collect();
 
-    // TODO
+    // TODO skip training
     let all_pairs = count_pairs(&entries, threads)?;
     if all_pairs.is_none() {
         return Ok(BpeTrainingResult { vocab, merges });
