@@ -1,4 +1,4 @@
-DO NOT build or run any test in this repo. The human contributor will give you very specific instructions. In most cases you just need to fill some gaps when implementing features together with the human contributor. A work-in-progress function is acceptable.
+DO NOT build or run any test in this repo, e.g. `cargo build` or `cargo test`. The human contributor will give you very specific instructions. In most cases you just need to fill some gaps when implementing features together with the human contributor. A work-in-progress function is acceptable.
 
 DO NOT edit files unless you are told to. It is acceptable to display the answers so that the human contributor can review before adapting the changes.
 
