@@ -5,11 +5,14 @@ use std::{
     thread,
 };
 
+pub type TokenBytes = Vec<u8>;
+pub type TokenIds = Vec<u16>;
 pub type Span = (usize, usize);
-pub type WordFreqMap = HashMap<Vec<u8>, usize>;
+type TokenId = u16;
+type PackedPair = u32;
 type BorrowedWordFreqMap<'a> = HashMap<&'a [u8], usize>;
 
-fn find_special_tokens(chunk: &[u8], special_tokens_bytes: &[Vec<u8>]) -> Option<usize> {
+fn find_special_tokens(chunk: &[u8], special_tokens_bytes: &[TokenBytes]) -> Option<usize> {
     let first_offset: Option<usize> = special_tokens_bytes
         .iter()
         .filter(|needle| !needle.is_empty())
@@ -46,7 +49,7 @@ pub fn find_chunk_boundaries(
         (0..=desired_num_chunks).map(|x| x * chunk_size).collect();
     chunk_boundaries[desired_num_chunks] = file_size;
 
-    let special_tokens_bytes: Vec<Vec<u8>> = special_tokens
+    let special_tokens_bytes: Vec<TokenBytes> = special_tokens
         .iter()
         .filter(|token| !token.is_empty())
         .map(|token| token.as_bytes().to_vec())
@@ -174,78 +177,74 @@ pub fn build_token_freq_map<'content>(
     all_pieces: &[Span],
     threads: usize,
     regex_str: &str,
-) -> Result<HashMap<&'content [u8], usize>, CustomError> {
+) -> Result<BorrowedWordFreqMap<'content>, CustomError> {
     if all_pieces.is_empty() {
         return Ok(HashMap::new());
     }
 
     let re_match = Regex::new(regex_str)?;
 
-    thread::scope(
-        |scope| -> Result<HashMap<&'content [u8], usize>, CustomError> {
-            let mut handles = Vec::new();
-            let re = &re_match;
-            let threads = threads.clamp(1, all_pieces.len());
-            let chunk_size = all_pieces.len().div_ceil(threads);
+    thread::scope(|scope| -> Result<_, CustomError> {
+        let mut handles = Vec::new();
+        let re = &re_match;
+        let threads = threads.clamp(1, all_pieces.len());
+        let chunk_size = all_pieces.len().div_ceil(threads);
 
-            for piece_chunk in all_pieces.chunks(chunk_size) {
-                handles.push(scope.spawn(
-                    move || -> Result<BorrowedWordFreqMap<'_>, CustomError> {
-                        let mut local_freq_map: BorrowedWordFreqMap<'_> = HashMap::new();
-                        for &(s, e) in piece_chunk {
-                            let chunk = &content[s..e];
-                            let text = str::from_utf8(chunk)?;
+        for piece_chunk in all_pieces.chunks(chunk_size) {
+            handles.push(scope.spawn(move || -> Result<_, CustomError> {
+                let mut local_freq_map: BorrowedWordFreqMap<'_> = HashMap::new();
+                for &(s, e) in piece_chunk {
+                    let chunk = &content[s..e];
+                    let text = str::from_utf8(chunk)?;
 
-                            let text_offset = s;
-                            for mat in re.find_iter(text)? {
-                                let mat = mat?;
-                                let matched_start = text_offset + mat.start();
-                                let matched_end = text_offset + mat.end();
-                                let matched_bytes = &content[matched_start..matched_end];
-                                *local_freq_map.entry(matched_bytes).or_insert(0) += 1;
-                            }
-                        }
+                    let text_offset = s;
+                    for mat in re.find_iter(text)? {
+                        let mat = mat?;
+                        let matched_start = text_offset + mat.start();
+                        let matched_end = text_offset + mat.end();
+                        let matched_bytes = &content[matched_start..matched_end];
+                        *local_freq_map.entry(matched_bytes).or_insert(0) += 1;
+                    }
+                }
 
-                        Ok(local_freq_map)
-                    },
-                ));
-            }
+                Ok(local_freq_map)
+            }));
+        }
 
-            let mut freq_map: BorrowedWordFreqMap<'_> = HashMap::new();
-            for handle in handles {
-                let thread_freq_map = handle.join().map_err(|_| CustomError::ThreadPanic)??;
-                merge_count_map(&mut freq_map, thread_freq_map);
-            }
+        let mut freq_map = HashMap::new();
+        for handle in handles {
+            let thread_freq_map = handle.join().map_err(|_| CustomError::ThreadPanic)??;
+            merge_count_map(&mut freq_map, thread_freq_map);
+        }
 
-            Ok(freq_map)
-        },
-    )
+        Ok(freq_map)
+    })
 }
 
 /// This function converts the raw borrowed freq_map to the format (owned u16) used in BPE training.
 ///
 /// The raw freq_map might be useful for debugging.
-pub fn convert_freq_map_to_u16(map: BorrowedWordFreqMap<'_>) -> HashMap<Vec<u16>, usize> {
+pub fn convert_freq_map_to_u16(map: BorrowedWordFreqMap<'_>) -> HashMap<TokenIds, usize> {
     map.into_iter()
-        .map(|(token, count)| (token.into_iter().map(|&b| b as u16).collect(), count))
+        .map(|(token, count)| (token.into_iter().map(|&b| b as TokenId).collect(), count))
         .collect()
 }
 
 /// Turning a [u16; 2] to a u32 to be used as the hash key to save time
-fn pack_pair(hi: u16, lo: u16) -> u32 {
+fn pack_pair(hi: TokenId, lo: TokenId) -> PackedPair {
     (hi as u32) << 16 | lo as u32
 }
 
 /// extract the internal used u32 form to the original byte pair
-fn unpack_pair(x: u32) -> [u16; 2] {
+fn unpack_pair(x: PackedPair) -> [TokenId; 2] {
     [(x >> 16) as u16, x as u16]
 }
 
 /**
  * NOTE: this function assumes length of all keys are >= 2
  */
-fn count_pairs_internal(all_pairs: &[(&[u16], usize)]) -> HashMap<u32, usize> {
-    let mut count_map = HashMap::<u32, usize>::new();
+fn count_pairs_internal(all_pairs: &[(&[TokenId], usize)]) -> HashMap<PackedPair, usize> {
+    let mut count_map = HashMap::new();
 
     for (key, count) in all_pairs {
         for pair in key.windows(2) {
@@ -258,10 +257,10 @@ fn count_pairs_internal(all_pairs: &[(&[u16], usize)]) -> HashMap<u32, usize> {
 }
 
 fn count_pairs(
-    entries: &[(Vec<u16>, usize)],
+    entries: &[(TokenIds, usize)],
     threads: usize,
-) -> Result<Option<HashMap<u32, usize>>, CustomError> {
-    let mut all_pairs: Vec<(&[u16], usize)> = Vec::new();
+) -> Result<Option<HashMap<PackedPair, usize>>, CustomError> {
+    let mut all_pairs: Vec<(&[TokenId], usize)> = Vec::new();
     for (k, v) in entries {
         if k.len() >= 2 {
             all_pairs.push((k.as_slice(), *v));
@@ -279,15 +278,15 @@ fn count_pairs(
         Ok(Some(count_pairs_internal(&all_pairs)))
     } else {
         thread::scope(
-            |scope| -> Result<Option<HashMap<u32, usize>>, CustomError> {
+            |scope| -> Result<Option<HashMap<PackedPair, usize>>, CustomError> {
                 let mut handles = Vec::new();
                 for pair_slice in all_pairs.chunks(chunk_size) {
-                    handles.push(scope.spawn(move || -> HashMap<u32, usize> {
+                    handles.push(scope.spawn(move || -> HashMap<PackedPair, usize> {
                         count_pairs_internal(pair_slice)
                     }));
                 }
 
-                let mut total_count = HashMap::<u32, usize>::new();
+                let mut total_count = HashMap::new();
                 for handle in handles {
                     let thread_count = handle.join().map_err(|_| CustomError::ThreadPanic)?;
                     merge_count_map(&mut total_count, thread_count);
@@ -299,12 +298,15 @@ fn count_pairs(
     }
 }
 
-type WordTuple<'a> = (&'a Vec<u8>, &'a Vec<u8>);
+type WordTuple<'a> = (&'a TokenBytes, &'a TokenBytes);
 fn cmp_tuple<'a>(a: WordTuple<'a>, b: WordTuple<'a>) -> std::cmp::Ordering {
     a.cmp(&b)
 }
 
-fn get_largest_pair(count_map: &HashMap<u32, usize>, vocab: &[Vec<u8>]) -> Option<[u16; 2]> {
+fn get_largest_pair(
+    count_map: &HashMap<PackedPair, usize>,
+    vocab: &[TokenBytes],
+) -> Option<[TokenId; 2]> {
     count_map
         .iter()
         .max_by(|(pair_a, count_a), (pair_b, count_b)| {
@@ -327,14 +329,14 @@ fn get_largest_pair(count_map: &HashMap<u32, usize>, vocab: &[Vec<u8>]) -> Optio
 /// should be subtracted from the global pair-count map, and `added` records
 /// pair counts that should be added.
 struct PairCountDelta {
-    removed: HashMap<u32, usize>,
-    added: HashMap<u32, usize>,
+    removed: HashMap<PackedPair, usize>,
+    added: HashMap<PackedPair, usize>,
 }
 
 fn replace_pair_in_token(
-    token: &mut Vec<u16>,
-    pair: &[u16; 2],
-    new_id: u16,
+    token: &mut TokenIds,
+    pair: &[TokenId; 2],
+    new_id: TokenId,
     multiplier: usize,
     count_delta: &mut PairCountDelta,
 ) {
@@ -377,13 +379,13 @@ fn replace_pair_in_token(
 }
 
 fn replace_pair_in_freq_map(
-    entries: &mut [(Vec<u16>, usize)],
-    pair: &[u16; 2],
-    new_id: u16,
+    entries: &mut [(TokenIds, usize)],
+    pair: &[TokenId; 2],
+    new_id: TokenId,
     threads: usize,
 ) -> Result<PairCountDelta, CustomError> {
-    let mut total_removed: HashMap<u32, usize> = HashMap::new();
-    let mut total_added: HashMap<u32, usize> = HashMap::new();
+    let mut total_removed: HashMap<PackedPair, usize> = HashMap::new();
+    let mut total_added: HashMap<PackedPair, usize> = HashMap::new();
 
     if entries.is_empty() {
         return Ok(PairCountDelta {
@@ -423,7 +425,7 @@ fn replace_pair_in_freq_map(
     })
 }
 
-fn apply_count_delta(all_pairs: &mut HashMap<u32, usize>, delta: PairCountDelta) {
+fn apply_count_delta(all_pairs: &mut HashMap<PackedPair, usize>, delta: PairCountDelta) {
     // During the merges, there might be a chance to deal with this sequence:
     // `[67, 65, 66, 65, 66, 67]` and `[65, 66]` should be replaced by 300u16,
     // which will finally become: `[67, 300, 300, 67]`.
@@ -440,7 +442,7 @@ fn apply_count_delta(all_pairs: &mut HashMap<u32, usize>, delta: PairCountDelta)
     // added: -> [300, 300], [300, 67]
     //
     // It will be safer to deal with the diffs
-    let all_keys: HashSet<u32> = delta
+    let all_keys: HashSet<PackedPair> = delta
         .removed
         .keys()
         .chain(delta.added.keys())
@@ -469,24 +471,24 @@ fn apply_count_delta(all_pairs: &mut HashMap<u32, usize>, delta: PairCountDelta)
     }
 }
 
-fn init_vocab() -> Vec<Vec<u8>> {
+fn init_vocab() -> Vec<TokenBytes> {
     (0..=u8::MAX).map(|i| vec![i]).collect()
 }
 
 pub struct BpeTrainingResult {
-    pub vocab: Vec<Vec<u8>>,
-    pub merges: Vec<(Vec<u8>, Vec<u8>)>,
+    pub vocab: Vec<TokenBytes>,
+    pub merges: Vec<(TokenBytes, TokenBytes)>,
 }
 
 pub fn train_bpe(
-    freq_map: HashMap<Vec<u16>, usize>,
+    freq_map: HashMap<TokenIds, usize>,
     max_vocab_size: usize,
     special_tokens: &[String],
     threads: usize,
 ) -> Result<BpeTrainingResult, CustomError> {
     let mut vocab = init_vocab();
-    let mut merges: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
-    let mut entries: Vec<(Vec<u16>, usize)> = freq_map.into_iter().collect();
+    let mut merges: Vec<(TokenBytes, TokenBytes)> = Vec::new();
+    let mut entries: Vec<(TokenIds, usize)> = freq_map.into_iter().collect();
 
     // TODO skip training
     let all_pairs = count_pairs(&entries, threads)?;
@@ -515,7 +517,7 @@ pub fn train_bpe(
 
         let a = vocab[pair[0] as usize].clone();
         let b = vocab[pair[1] as usize].clone();
-        let c: Vec<u8> = a.iter().chain(b.iter()).copied().collect();
+        let c: TokenBytes = a.iter().chain(b.iter()).copied().collect();
         vocab.push(c);
         merges.push((a, b));
 
@@ -541,8 +543,8 @@ mod tests {
 
     #[test]
     fn test_find_special_tokens_should_return_the_smallest_occurance() {
-        let data: Vec<u8> = vec![1, 2, 3, 4, 5];
-        let special_tokens_bytes: Vec<Vec<u8>> = vec![vec![8], vec![5], vec![3]];
+        let data: TokenBytes = vec![1, 2, 3, 4, 5];
+        let special_tokens_bytes: Vec<TokenBytes> = vec![vec![8], vec![5], vec![3]];
 
         let offset = find_special_tokens(&data, &special_tokens_bytes);
         assert_eq!(offset, Some(2));
@@ -550,16 +552,16 @@ mod tests {
 
     #[test]
     fn test_find_special_tokens_should_return_none() {
-        let data: Vec<u8> = vec![1, 2, 3, 4, 5];
-        let special_tokens_bytes: Vec<Vec<u8>> = vec![vec![8]];
+        let data: TokenBytes = vec![1, 2, 3, 4, 5];
+        let special_tokens_bytes: Vec<TokenBytes> = vec![vec![8]];
         let offset = find_special_tokens(&data, &special_tokens_bytes);
         assert!(offset.is_none());
     }
 
     #[test]
     fn test_find_special_tokens_with_empty_special_tokens() {
-        let data: Vec<u8> = vec![1, 2, 3, 4, 5];
-        let special_tokens_bytes: Vec<Vec<u8>> = vec![];
+        let data: TokenBytes = vec![1, 2, 3, 4, 5];
+        let special_tokens_bytes: Vec<TokenBytes> = vec![];
         let offset = find_special_tokens(&data, &special_tokens_bytes);
         assert!(offset.is_none());
     }
@@ -632,7 +634,7 @@ mod tests {
     #[test]
     fn test_largest_pair() {
         let vocab = init_vocab();
-        let mut count_map: HashMap<u32, usize> = HashMap::new();
+        let mut count_map: HashMap<PackedPair, usize> = HashMap::new();
 
         count_map.insert(pack_pair('l' as u16, 'o' as u16), 7);
         count_map.insert(pack_pair('o' as u16, 'w' as u16), 7);
@@ -654,7 +656,7 @@ mod tests {
     fn test_train_bpe() {
         let text = b"aaabdaaabac";
         let text_vec: Vec<u16> = text.iter().map(|&b| b as u16).collect();
-        let mut freq_map: HashMap<Vec<u16>, usize> = HashMap::new();
+        let mut freq_map: HashMap<TokenIds, usize> = HashMap::new();
         freq_map.insert(text_vec, 1);
         let special_tokens = Vec::new();
 
@@ -691,7 +693,7 @@ mod tests {
 
     #[test]
     fn test_cmp_tuple() {
-        let data: Vec<(Vec<u8>, Vec<u8>)> = vec![
+        let data: Vec<(TokenBytes, TokenBytes)> = vec![
             (vec![65], vec![66]),       // A B
             (vec![65], vec![67]),       // A C
             (vec![66], b"ZZ".to_vec()), // B ZZ
@@ -711,12 +713,12 @@ mod tests {
             removed: HashMap::new(),
             added: HashMap::new(),
         };
-        let mut token: Vec<u16> = vec![67, 65, 66, 65, 66, 67];
-        let pair: [u16; 2] = [65, 66];
+        let mut token: TokenIds = vec![67, 65, 66, 65, 66, 67];
+        let pair: [TokenId; 2] = [65, 66];
         replace_pair_in_token(&mut token, &pair, 300, 1, &mut delta);
 
         assert_eq!(delta.removed.len(), 5);
-        let removed_entries: [(u32, usize); 5] = [
+        let removed_entries: [(PackedPair, usize); 5] = [
             (pack_pair(67, 65), 1),
             (pack_pair(65, 66), 2),
             (pack_pair(66, 65), 1),
@@ -727,7 +729,7 @@ mod tests {
             assert_eq!(delta.removed.get(&k), Some(&v));
         }
 
-        let added_entries: [(u32, usize); 4] = [
+        let added_entries: [(PackedPair, usize); 4] = [
             (pack_pair(67, 300), 1),
             (pack_pair(300, 65), 1),
             (pack_pair(300, 300), 1),
