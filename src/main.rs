@@ -66,8 +66,11 @@ fn hex_encode(bytes: &[u8]) -> String {
     output
 }
 
-fn write_freq_map(path: &PathBuf, freq_map: &cs336_rs::utils::WordFreqMap) -> io::Result<()> {
-    let mut entries = freq_map.iter().collect::<Vec<_>>();
+fn write_freq_map<'a, I>(path: &PathBuf, entries: I) -> io::Result<()>
+where
+    I: IntoIterator<Item = (&'a [u8], usize)>,
+{
+    let mut entries = entries.into_iter().collect::<Vec<_>>();
     entries.sort_by(|(left, _), (right, _)| left.cmp(right));
 
     let mut file = fs::File::create(path)?;
@@ -112,7 +115,11 @@ fn main() {
     println!("result: {} total tokens", total_count);
 
     if let Some(output_path) = args.output_path {
-        write_freq_map(&output_path, &freq_map).unwrap_or_else(|err| {
+        write_freq_map(
+            &output_path,
+            freq_map.iter().map(|(token, count)| (*token, *count)),
+        )
+        .unwrap_or_else(|err| {
             eprintln!("failed to write {}: {err}", output_path.display());
             process::exit(1);
         });
