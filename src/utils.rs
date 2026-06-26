@@ -10,7 +10,7 @@ pub type TokenIds = Vec<u16>;
 pub type Span = (usize, usize);
 type TokenId = u16;
 type PackedPair = u32;
-type BorrowedWordFreqMap<'a> = HashMap<&'a [u8], usize>;
+pub type BorrowedWordFreqMap<'a> = HashMap<&'a [u8], usize>;
 
 fn find_special_tokens(chunk: &[u8], special_tokens_bytes: &[TokenBytes]) -> Option<usize> {
     let first_offset: Option<usize> = special_tokens_bytes
@@ -103,6 +103,10 @@ pub fn find_pretoken_spans(
 
     if special_tokens.len() == 0 {
         return Ok(vec![vec![(0, content.len())]]);
+    }
+
+    if boundaries.len() < 2 {
+        panic!("Invalid boundaries");
     }
 
     let mut chunks: Vec<Span> = vec![];
@@ -498,7 +502,13 @@ pub fn train_bpe(
 
     let mut all_pairs = all_pairs.unwrap();
 
-    let largest_idx = (max_vocab_size.min(0x10000) - 1 - special_tokens.len()) as u16;
+    let largest_idx = max_vocab_size
+        .min(0x10000)
+        .checked_sub(1 + special_tokens.len())
+        .expect("vocab size should be greater than the length of special tokens")
+        as u16;
+
+    debug_assert!(largest_idx > 255, "vocab size should be greater than 255");
 
     for idx in 256..=largest_idx {
         if all_pairs.len() == 0 {
