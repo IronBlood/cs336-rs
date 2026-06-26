@@ -101,13 +101,11 @@ pub fn find_pretoken_spans(
         .filter(|token| !token.is_empty())
         .collect::<Vec<_>>();
 
-    if special_tokens.len() == 0 {
+    if special_tokens.is_empty() {
         return Ok(vec![vec![(0, content.len())]]);
     }
 
-    if boundaries.len() < 2 {
-        panic!("Invalid boundaries");
-    }
+    assert!(boundaries.len() >= 2, "invalid boundaries");
 
     let mut chunks: Vec<Span> = vec![];
     for i in 0..boundaries.len() - 1 {
@@ -168,7 +166,7 @@ pub fn find_pretoken_spans(
     Ok(all_pieces)
 }
 
-/// This function builds a hashmap of word-count to reduce the time for BPE training.
+/// This function builds a hashmap of token byte sequence count to reduce the time for BPE training.
 ///
 /// There are a lot of repeating words in the original content. When doing BPE, we need
 /// to count every byte pairs. There are lots of repeating words, so counting once then
@@ -328,7 +326,7 @@ fn get_largest_pair(
 
 /// Pair-count changes produced by applying one BPE merge.
 ///
-/// Whne a pair `(a, b)` is replaced by a new token `x`, only neighboring pairs
+/// When a pair `(a, b)` is replaced by a new token `x`, only neighboring pairs
 /// around each replacement site change. `removed` records pair counts that
 /// should be subtracted from the global pair-count map, and `added` records
 /// pair counts that should be added.
@@ -350,7 +348,7 @@ fn replace_pair_in_token(
 
     while read < token.len() {
         if read + 1 < token.len() && token[read] == pair[0] && token[read + 1] == pair[1] {
-            // Imagine we are going to replace `A B` from `[L] A B [R}` with `X`, where `L` and `R` are optional.
+            // Imagine we are going to replace `A B` from `[L] A B [R]` with `X`, where `L` and `R` are optional.
             // This block means `L` exists, so we need to remove `LA`, then add `LX`
             if write > 0 {
                 let prev = pack_pair(token[write - 1], pair[0]);
