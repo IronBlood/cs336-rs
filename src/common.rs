@@ -11,6 +11,10 @@ fn is_gpt2_visible_byte(b: u8) -> bool {
     (b >= 0x21 && b <= 0x7E) || (b >= 0xA1 && b != 0xAD)
 }
 
+fn is_gpt2_shifted_byte(b: u32) -> bool {
+    (b >= 0x100 && b < 0x0121) || (b > 0x017E && b < 0x01A1) || b == 0x01AD
+}
+
 fn byte_to_utf8(bytes: &mut Vec<u8>, x: u16) {
     debug_assert!(x < 0x0200, "invalid range");
     if x < 0x80 {
@@ -37,50 +41,18 @@ pub fn bytes_to_string(bytes: &[u8]) -> String {
     String::from_utf8(buf).expect("valid UTF-8")
 }
 
-fn is_utf8_byte_3(x: u8) -> bool {
-    ((x >> 4) & 0xf != 0) && ((x >> 3) & 0x1 == 0)
-}
-
-fn is_utf8_byte_2(x: u8) -> bool {
-    ((x >> 5) & 0x7 != 0) && ((x >> 4) & 0x1 == 0)
-}
-
-fn is_utf8_byte_1(x: u8) -> bool {
-    ((x >> 6) & 0x3 != 0) && ((x >> 5) & 0x1 == 0)
-}
-
-fn is_utf8_byte_0(x: u8) -> bool {
-    ((x >> 7) & 0x1 != 0) && ((x >> 6) & 0x1 == 0)
-}
-
 pub fn string_to_bytes(s: &str) -> Vec<u8> {
-    let raw_bytes = s.as_bytes();
-    let mut bytes: Vec<u8> = Vec::with_capacity(raw_bytes.len());
-    let mut read = 0;
-    let len = raw_bytes.len();
+    let mut bytes: Vec<u8> = Vec::with_capacity(s.len());
 
-    while read < len {
-        let curr = raw_bytes[read];
-
-        // TODO: validate the bytes
-        if is_utf8_byte_1(curr) {
-            if read + 1 < len && is_utf8_byte_0(raw_bytes[read + 1]) {
-                let next = raw_bytes[read + 1];
-                let byte: u8 = ((curr & 0x1F) << 6) | (next & 0x3F);
-                bytes.push(byte);
-                read += 2;
-            } else {
-                panic!("not a valid sequence");
-            }
+    for ch in s.chars() {
+        let code = ch as u32;
+        if is_gpt2_shifted_byte(code) {
+            bytes.push((code - 0x100) as u8);
+        } else if code <= 0xFF && is_gpt2_visible_byte(code as u8) {
+            bytes.push(code as u8)
         } else {
-            bytes.push(curr);
-            read += 1;
+            panic!("invalid GPT-2 byte-unicode character: {ch:?}");
         }
-    }
-
-    // TODO: this block should be benchmarked
-    if bytes.len() * 2 <= len {
-        bytes.shrink_to_fit();
     }
 
     bytes
