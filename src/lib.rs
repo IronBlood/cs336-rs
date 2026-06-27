@@ -1,4 +1,4 @@
-mod common;
+mod encode;
 pub mod error;
 pub mod ffi;
 pub mod regex;
