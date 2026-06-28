@@ -1,33 +1,29 @@
-use std::collections::HashMap;
+use std::{fs, path::PathBuf};
 
 use crate::{
     encode::{bytes_to_string, string_to_bytes},
-    error::CustomError,
     utils::TokenBytes,
 };
 
-fn parse_vocab(content: &str) -> Result<HashMap<u16, Vec<u8>>, CustomError> {
-    let json: HashMap<String, u16> = serde_json::from_str(&content)?;
-
-    let vocab = json
-        .into_iter()
-        .map(|(s, idx)| (idx, string_to_bytes(&s)))
-        .collect();
-
-    Ok(vocab)
+fn parse_vocab(content: &str) -> Vec<TokenBytes> {
+    content
+        .trim_end()
+        .lines()
+        .map(|line| string_to_bytes(line))
+        .collect()
 }
 
-fn serialize_vocab(vocab: &HashMap<u16, Vec<u8>>) -> Result<String, CustomError> {
-    let serialized_vocab: HashMap<String, u16> = vocab
+fn serialize_vocab(vocab: &[TokenBytes]) -> String {
+    vocab
         .iter()
-        .map(|(&idx, bytes)| (bytes_to_string(bytes), idx))
-        .collect();
-
-    Ok(serde_json::to_string_pretty(&serialized_vocab)?)
+        .map(|token| bytes_to_string(token))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn parse_merges(content: &str) -> Vec<(TokenBytes, TokenBytes)> {
-    let merges: Vec<_> = content
+    content
+        .trim_end()
         .lines()
         .map(|line| {
             let (token_1, token_2) = line
@@ -37,9 +33,7 @@ fn parse_merges(content: &str) -> Vec<(TokenBytes, TokenBytes)> {
             let token_2 = string_to_bytes(token_2);
             (token_1, token_2)
         })
-        .collect();
-
-    merges
+        .collect()
 }
 
 fn serialize_merges(merges: &[(TokenBytes, TokenBytes)]) -> String {
@@ -52,29 +46,45 @@ fn serialize_merges(merges: &[(TokenBytes, TokenBytes)]) -> String {
         .join("\n")
 }
 
+pub fn load_vocab(path: &PathBuf) -> Vec<TokenBytes> {
+    let content = fs::read_to_string(&path).expect("file should be readable");
+
+    parse_vocab(&content)
+}
+
+pub fn write_vocab(path: &PathBuf, vocab: &[TokenBytes]) {
+    fs::write(path, serialize_vocab(vocab)).expect("file should be writeable");
+}
+
+pub fn load_merges(path: &PathBuf) -> Vec<(TokenBytes, TokenBytes)> {
+    let content = fs::read_to_string(&path).expect("file should be readable");
+
+    parse_merges(&content)
+}
+
+pub fn write_merges(path: &PathBuf, merges: &[(TokenBytes, TokenBytes)]) {
+    fs::write(path, serialize_merges(merges)).expect("file should be writeable");
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
 
     #[test]
     fn test_parse_vocab() {
-        let content = "{\"ā\":1}";
-        let vocab = parse_vocab(&content).expect("should be valid json");
+        let content = "ā\n";
+        let vocab = parse_vocab(&content);
         assert_eq!(vocab.len(), 1);
-        let v = vocab.get(&1);
-        assert!(v.is_some());
-        let v = v.unwrap();
-        assert_eq!(v.len(), 1);
-        assert_eq!(v[0], 1);
+        assert_eq!(vocab[0], vec![1]);
     }
 
     #[test]
     fn test_serialize_vocab() {
-        let mut vocab: HashMap<u16, Vec<u8>> = HashMap::new();
-        vocab.insert(42, vec![1]);
+        let mut vocab: Vec<TokenBytes> = Vec::new();
+        vocab.push(vec![1]);
 
-        let json = serialize_vocab(&vocab).expect("should be valid json");
-        assert_eq!(json, "{\n  \"ā\": 42\n}");
+        let content = serialize_vocab(&vocab);
+        assert_eq!(content, "ā");
     }
 
     #[test]
