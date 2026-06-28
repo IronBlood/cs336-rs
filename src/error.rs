@@ -5,6 +5,7 @@ use std::{error::Error, fmt};
 pub enum CustomError {
     InvalidUtf8(std::str::Utf8Error),
     InvalidRegex(RegexError),
+    InvalidJson(serde_json::Error),
     ThreadPanic,
 }
 
@@ -13,6 +14,7 @@ impl fmt::Display for CustomError {
         match self {
             Self::InvalidUtf8(err) => write!(f, "invalid UTF-8: {err}"),
             Self::InvalidRegex(err) => write!(f, "invalid regex: {err}"),
+            Self::InvalidJson(err) => write!(f, "invalid json: {err}"),
             Self::ThreadPanic => write!(f, "worker thread panicked"),
         }
     }
@@ -23,6 +25,7 @@ impl Error for CustomError {
         match self {
             Self::InvalidUtf8(err) => Some(err),
             Self::InvalidRegex(err) => Some(err),
+            Self::InvalidJson(err) => Some(err),
             Self::ThreadPanic => None,
         }
     }
@@ -37,5 +40,11 @@ impl From<std::str::Utf8Error> for CustomError {
 impl From<RegexError> for CustomError {
     fn from(err: RegexError) -> Self {
         Self::InvalidRegex(err)
+    }
+}
+
+impl From<serde_json::Error> for CustomError {
+    fn from(err: serde_json::Error) -> Self {
+        Self::InvalidJson(err)
     }
 }
