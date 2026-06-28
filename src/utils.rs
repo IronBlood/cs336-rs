@@ -1,5 +1,7 @@
 use crate::error::CustomError;
 use crate::regex::{Regex, escape_literal};
+#[cfg(feature = "profile-bpe")]
+use std::time::{Duration, Instant};
 use std::{
     collections::{HashMap, HashSet},
     thread,
@@ -535,6 +537,85 @@ pub fn train_bpe(
     Ok(BpeTrainingResult { vocab, merges })
 }
 
+#[cfg(feature = "profile-bpe")]
+/// This is a copied version of `train_bpe` to profile time cost
+pub fn train_bpe_profile(
+    freq_map: HashMap<TokenIds, usize>,
+    max_vocab_size: usize,
+    special_tokens: &[String],
+    threads: usize,
+) -> Result<BpeTrainingResult, CustomError> {
+    let mut vocab = init_vocab();
+    let mut merges: Vec<(TokenBytes, TokenBytes)> = Vec::new();
+    let mut entries: Vec<(TokenIds, usize)> = freq_map.into_iter().collect();
+
+    let mut timer_init_pair_counting = Duration::ZERO;
+    let mut timer_get_largest_pair = Duration::ZERO;
+    let mut timer_merges = Duration::ZERO;
+    let mut timer_patch_pair_counting = Duration::ZERO;
+
+    let t = Instant::now();
+    let all_pairs = count_pairs(&entries, threads)?;
+    timer_init_pair_counting += t.elapsed();
+
+    if all_pairs.is_none() {
+        return Ok(BpeTrainingResult { vocab, merges });
+    }
+
+    let mut all_pairs = all_pairs.unwrap();
+
+    let largest_idx = max_vocab_size
+        .min(0x10000)
+        .checked_sub(1 + special_tokens.len())
+        .expect("vocab size should be greater than the length of special tokens")
+        as u16;
+
+    debug_assert!(largest_idx > 255, "vocab size should be greater than 255");
+
+    for idx in 256..=largest_idx {
+        if all_pairs.len() == 0 {
+            // nothing to be merged
+            break;
+        }
+
+        let t = Instant::now();
+        let pair = get_largest_pair(&all_pairs, &vocab);
+        timer_get_largest_pair += t.elapsed();
+        if pair.is_none() {
+            // nothing found, shouldn't be here
+            break;
+        }
+
+        let pair = pair.unwrap();
+        let t = Instant::now();
+        let delta = replace_pair_in_freq_map(&mut entries, &pair, idx, threads)?;
+        timer_merges += t.elapsed();
+
+        let a = vocab[pair[0] as usize].clone();
+        let b = vocab[pair[1] as usize].clone();
+        let c: TokenBytes = a.iter().chain(b.iter()).copied().collect();
+        vocab.push(c);
+        merges.push((a, b));
+
+        let t = Instant::now();
+        apply_count_delta(&mut all_pairs, delta);
+        timer_patch_pair_counting += t.elapsed();
+    }
+
+    println!("------");
+    println!(
+        "init pair counting: {:.3}s",
+        timer_init_pair_counting.as_secs_f64()
+    );
+    println!("largest pair: {:.3}s", timer_get_largest_pair.as_secs_f64());
+    println!("replace: {:.3}s", timer_merges.as_secs_f64());
+    println!(
+        "patch pair counting: {:.3}s",
+        timer_patch_pair_counting.as_secs_f64()
+    );
+    println!("------");
+    Ok(BpeTrainingResult { vocab, merges })
+}
 /// Adds counts from `source` into `target`.
 fn merge_count_map<T>(target: &mut HashMap<T, usize>, source: HashMap<T, usize>)
 where

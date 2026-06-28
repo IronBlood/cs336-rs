@@ -3,6 +3,14 @@ name = "cs336_rs"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+profile-bpe = []
+
+[[bin]]
+name = "profile_bpe"
+path = "src/bin/profile_bpe.rs"
+required-features = ["profile-bpe"]
+
 [dependencies]
 
 [dev-dependencies]
