@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    env,
     fs::{self, read},
     path::PathBuf,
     process, thread,
@@ -8,7 +9,7 @@ use std::{
 
 use cs336_rs::utils::{
     Span, build_token_freq_map, convert_freq_map_to_u16, find_chunk_boundaries,
-    find_pretoken_spans, train_bpe,
+    find_pretoken_spans, train_bpe_profile,
 };
 
 struct StepTimer {
@@ -68,8 +69,8 @@ fn bpe(input_path: PathBuf, vocab_size: u16, special_tokens: Vec<String>) -> PyB
     let freq_map = convert_freq_map_to_u16(freq_map);
     timer.mark("convert freq map");
 
-    let result =
-        train_bpe(freq_map, vocab_size as usize, &special_tokens, cpus).expect("should succeed");
+    let result = train_bpe_profile(freq_map, vocab_size as usize, &special_tokens, cpus)
+        .expect("should succeed");
     timer.mark("train bpe");
 
     let mut vocab: BpeTrainingResultVocab = HashMap::new();
@@ -82,11 +83,26 @@ fn bpe(input_path: PathBuf, vocab_size: u16, special_tokens: Vec<String>) -> PyB
 }
 
 fn main() {
-    let input_path = "tests/fixtures/corpus.en";
-    let input_path = fs::canonicalize(input_path).unwrap_or_else(|err| {
+    let mut args = env::args();
+    let program = args.next().unwrap_or_else(|| "profile_bpe".to_string());
+    let Some(input_path) = args.next() else {
+        eprintln!("usage: {program} <input_path> <vocab_size>");
+        process::exit(1);
+    };
+    let Some(vocab_size) = args.next() else {
+        eprintln!("usage: {program} <input_path> <vocab_size>");
+        process::exit(1);
+    };
+
+    let vocab_size = vocab_size.parse::<u16>().unwrap_or_else(|err| {
+        eprintln!("invalid vocab size {vocab_size}: {err}");
+        process::exit(1);
+    });
+
+    let input_path = fs::canonicalize(&input_path).unwrap_or_else(|err| {
         eprintln!("invalid file path {input_path}: {err}",);
         process::exit(1);
     });
 
-    bpe(input_path, 500, vec!["<|endoftext|>".to_string()]);
+    bpe(input_path, vocab_size, vec!["<|endoftext|>".to_string()]);
 }
