@@ -1,18 +1,14 @@
-use crate::error::CustomError;
-use crate::regex::{Regex, escape_literal};
+use crate::{
+    error::CustomError,
+    regex::{Regex, escape_literal},
+    types::{BorrowedWordFreqMap, PackedPair, Span, TokenBytes, TokenId, TokenIds},
+};
 #[cfg(feature = "profile-bpe")]
 use std::time::{Duration, Instant};
 use std::{
     collections::{HashMap, HashSet},
     thread,
 };
-
-pub type TokenBytes = Vec<u8>;
-pub type TokenIds = Vec<u16>;
-pub type Span = (usize, usize);
-type TokenId = u16;
-type PackedPair = u32;
-pub type BorrowedWordFreqMap<'a> = HashMap<&'a [u8], usize>;
 
 fn find_special_tokens(chunk: &[u8], special_tokens_bytes: &[TokenBytes]) -> Option<usize> {
     let first_offset: Option<usize> = special_tokens_bytes

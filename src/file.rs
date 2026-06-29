@@ -2,7 +2,7 @@ use std::{fs, path::PathBuf};
 
 use crate::{
     encode::{bytes_to_string, string_to_bytes},
-    utils::TokenBytes,
+    types::TokenBytes,
 };
 
 fn parse_vocab(content: &str) -> Vec<TokenBytes> {
