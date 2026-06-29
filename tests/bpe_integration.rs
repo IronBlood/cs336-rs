@@ -1,14 +1,15 @@
 mod common;
 use std::{
     collections::{HashMap, HashSet},
-    error::Error,
-    fs, io,
+    fs,
     path::PathBuf,
     process, thread,
     time::Instant,
 };
 
 use cs336_rs::utils::*;
+
+use crate::common::{load_reference_merges, load_reference_vocab};
 
 type BpeTrainingResultVocab = HashMap<usize, Vec<u8>>;
 type BpeTrainingResultMerges = Vec<(Vec<u8>, Vec<u8>)>;
@@ -30,7 +31,7 @@ fn bpe(input_path: PathBuf, vocab_size: u16, special_tokens: Vec<String>) -> PyB
     let gpt2_regex_str =
         r"'(?:[sdmt]|ll|ve|re)| ?\p{L}++| ?\p{N}++| ?[^\s\p{L}\p{N}]++|\s++$|\s+(?!\S)|\s";
 
-    let all_pieces: Vec<Span> = spans.into_iter().flatten().collect();
+    let all_pieces: Vec<_> = spans.into_iter().flatten().collect();
     let freq_map =
         build_token_freq_map(&content, &all_pieces, cpus, &gpt2_regex_str).expect("should succeed");
 
@@ -43,58 +44,6 @@ fn bpe(input_path: PathBuf, vocab_size: u16, special_tokens: Vec<String>) -> PyB
         vocab.insert(id + 1, bytes);
     }
     (vocab, result.merges)
-}
-
-fn load_reference_merges(
-    reference_merges_path: &str,
-    gpt2_byte_decoder: &HashMap<char, u8>,
-) -> io::Result<Vec<(Vec<u8>, Vec<u8>)>> {
-    let contents = fs::read_to_string(reference_merges_path)?;
-
-    let reference_merges = contents
-        .lines()
-        .map(|line| {
-            let (merge_token_1, merge_token_2) = line
-                .split_once(' ')
-                .expect("each merge line should contain two tokens");
-
-            let token_1 = merge_token_1
-                .chars()
-                .map(|ch| gpt2_byte_decoder[&ch])
-                .collect::<Vec<u8>>();
-
-            let token_2 = merge_token_2
-                .chars()
-                .map(|ch| gpt2_byte_decoder[&ch])
-                .collect::<Vec<u8>>();
-
-            (token_1, token_2)
-        })
-        .collect();
-
-    Ok(reference_merges)
-}
-
-fn load_reference_vocab(
-    reference_vocab_path: &str,
-    gpt2_byte_decoder: &HashMap<char, u8>,
-) -> Result<HashMap<usize, Vec<u8>>, Box<dyn Error>> {
-    let contents = fs::read_to_string(reference_vocab_path)?;
-
-    let gpt2_reference_vocab: HashMap<String, usize> = serde_json::from_str(&contents)?;
-
-    let reference_vocab = gpt2_reference_vocab
-        .into_iter()
-        .map(|(gpt2_vocab_item, gpt2_vocab_index)| {
-            let bytes = gpt2_vocab_item
-                .chars()
-                .map(|token| gpt2_byte_decoder[&token])
-                .collect::<Vec<u8>>();
-            (gpt2_vocab_index, bytes)
-        })
-        .collect();
-
-    Ok(reference_vocab)
 }
 
 #[test]
