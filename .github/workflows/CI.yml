@@ -1,0 +1,50 @@
+name: CI
+env:
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: "sccache"
+
+on:
+  push:
+    paths:
+      - src/**
+      - tests/**
+      - Cargo.lock
+      - Cargo.toml
+      - .github/workflows/CI.yml
+    branches:
+      - main
+  pull_request:
+    paths:
+      - src/**
+      - tests/**
+      - Cargo.lock
+      - Cargo.toml
+      - .github/workflows/CI.yml
+    branches:
+      - main
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libpcre2-dev
+
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696
+
+      - name: Cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build
+        run: cargo build
+
+      - name: Test
+        run: cargo test
