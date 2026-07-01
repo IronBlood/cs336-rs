@@ -9,9 +9,9 @@ use std::{
 
 use cs336_rs::utils::*;
 
-use crate::common::{load_reference_merges, load_reference_vocab};
+use crate::common::{load_merges, load_vocab};
 
-type BpeTrainingResultVocab = HashMap<usize, Vec<u8>>;
+type BpeTrainingResultVocab = HashMap<u16, Vec<u8>>;
 type BpeTrainingResultMerges = Vec<(Vec<u8>, Vec<u8>)>;
 type PyBpeTrainingResult = (BpeTrainingResultVocab, BpeTrainingResultMerges);
 
@@ -41,7 +41,7 @@ fn bpe(input_path: PathBuf, vocab_size: u16, special_tokens: Vec<String>) -> PyB
     let mut vocab: BpeTrainingResultVocab = HashMap::new();
     vocab.insert(0, special_tokens[0].clone().into());
     for (id, bytes) in result.vocab.into_iter().enumerate() {
-        vocab.insert(id + 1, bytes);
+        vocab.insert((id + 1) as u16, bytes);
     }
     (vocab, result.merges)
 }
@@ -81,11 +81,11 @@ fn test_train_bpe() {
         .map(|(k, v)| (v, k))
         .collect();
 
-    let reference_merges = load_reference_merges(&reference_merges_path, &gpt2_byte_decoder)
-        .expect("should read file");
+    let reference_merges =
+        load_merges(&reference_merges_path, &gpt2_byte_decoder).expect("should read file");
 
-    let reference_vocab = load_reference_vocab(&reference_vocab_path, &gpt2_byte_decoder)
-        .expect("should be a valid json file");
+    let reference_vocab =
+        load_vocab(&reference_vocab_path, &gpt2_byte_decoder).expect("should be a valid json file");
 
     assert_eq!(merges, reference_merges);
 

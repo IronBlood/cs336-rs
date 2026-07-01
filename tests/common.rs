@@ -25,13 +25,13 @@ pub fn gpt2_bytes_to_unicode() -> HashMap<u8, char> {
     bs.into_iter().zip(characters).collect()
 }
 
-pub fn load_reference_vocab(
-    reference_vocab_path: &str,
+pub fn load_vocab(
+    vocab_path: &str,
     gpt2_byte_decoder: &HashMap<char, u8>,
-) -> Result<HashMap<usize, Vec<u8>>, Box<dyn Error>> {
-    let contents = fs::read_to_string(reference_vocab_path)?;
+) -> Result<HashMap<u16, Vec<u8>>, Box<dyn Error>> {
+    let contents = fs::read_to_string(vocab_path)?;
 
-    let gpt2_reference_vocab: HashMap<String, usize> = serde_json::from_str(&contents)?;
+    let gpt2_reference_vocab: HashMap<String, u16> = serde_json::from_str(&contents)?;
 
     let reference_vocab = gpt2_reference_vocab
         .into_iter()
@@ -47,11 +47,11 @@ pub fn load_reference_vocab(
     Ok(reference_vocab)
 }
 
-pub fn load_reference_merges(
-    reference_merges_path: &str,
+pub fn load_merges(
+    merges_path: &str,
     gpt2_byte_decoder: &HashMap<char, u8>,
 ) -> io::Result<Vec<(Vec<u8>, Vec<u8>)>> {
-    let contents = fs::read_to_string(reference_merges_path)?;
+    let contents = fs::read_to_string(merges_path)?;
 
     let reference_merges = contents
         .lines()
