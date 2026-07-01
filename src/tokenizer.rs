@@ -67,7 +67,7 @@ impl Tokenizer {
     pub fn load_course(
         vocab: HashMap<u16, TokenBytes>,
         merges: Vec<(TokenBytes, TokenBytes)>,
-        special_tokens: Option<&[&str]>,
+        special_tokens: Option<&[String]>,
         pretokenize_regex_str: &str,
     ) -> Result<Self, CustomError> {
         let mut special_token_map: HashMap<String, TokenId> = HashMap::new();
