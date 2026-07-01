@@ -1,48 +1,302 @@
+use std::collections::{HashMap, HashSet};
+
 use crate::{
     error::CustomError,
-    file::{parse_merges, parse_vocab},
-    types::TokenBytes,
-    utils::{
-        build_token_freq_map, convert_freq_map_to_u16, find_chunk_boundaries, find_pretoken_spans,
-        train_bpe,
-    },
+    regex::{Regex, escape_literal},
+    types::{PackedPair, TokenBytes, TokenId, TokenIds},
+    utils::pack_pair,
 };
 
+struct MergeRule {
+    /// lOwer rank means the merge has higher priority
+    rank: usize,
+    new_id: TokenId,
+}
+
 pub struct Tokenizer {
-    vocab: Vec<TokenBytes>,
-    merges: Vec<(TokenBytes, TokenBytes)>,
-    special_tokens: Vec<String>,
+    // both raw and for decoding
+    decoder: HashMap<TokenId, TokenBytes>,
+    // for encoding
+    special_tokens_encoder: HashMap<String, TokenId>,
+    // this should be built from merges for encoding
+    encoder: HashMap<PackedPair, MergeRule>,
+    // this converts raw bytes to TokenId
+    byte_encoder: HashMap<u8, TokenId>,
+    pretokenize_regex: Regex,
+    special_regex: Option<Regex>,
+}
+
+/// This function assumes merges start from index 256 in a vocab
+fn build_encoder(
+    vocab_map: &HashMap<&TokenBytes, TokenId>,
+    merges: &[(TokenBytes, TokenBytes)],
+) -> HashMap<PackedPair, MergeRule> {
+    let mut map = HashMap::new();
+    for (rank, (a, b)) in merges.iter().enumerate() {
+        let a_id = *vocab_map.get(a).expect("token should exist");
+        let b_id = *vocab_map.get(b).expect("token should exist");
+        let pair = pack_pair(a_id, b_id);
+        let merged: TokenBytes = a.iter().chain(b.iter()).copied().collect();
+        let new_id = *vocab_map
+            .get(&merged)
+            .expect("merged token should exist in vocab");
+        map.insert(pair, MergeRule { rank, new_id });
+    }
+    map
+}
+
+/// This function returns a HashMap, which is used to convert the raw bytes to token ids
+///
+/// Not all initial vocabularies (the first 256) are placed in the same order, this encoder
+/// should be used before encoding.
+fn build_byte_encoder(vocab: &HashMap<TokenId, TokenBytes>) -> HashMap<u8, TokenId> {
+    (0..256)
+        .map(|id| {
+            let token_bytes = vocab.get(&id).expect("id should exist");
+            if token_bytes.len() != 1 {
+                panic!("vocab < 256 should be single character");
+            }
+            (token_bytes[0], id)
+        })
+        .collect()
 }
 
 impl Tokenizer {
-    pub fn train(
-        content: &[u8],
-        vocab_size: u16,
-        special_tokens: &[String],
-        threads: usize,
+    // The test cases used in CS336 isn't in the best shape, so this function
+    // transform to the internal data structures
+    pub fn load_course(
+        vocab: HashMap<u16, TokenBytes>,
+        merges: Vec<(TokenBytes, TokenBytes)>,
+        special_tokens: Option<&[&str]>,
         pretokenize_regex_str: &str,
     ) -> Result<Self, CustomError> {
-        let boundaries = find_chunk_boundaries(content, threads, &special_tokens);
-        let mut spans =
-            find_pretoken_spans(content, &boundaries, &special_tokens).expect("should succeed");
-        spans.sort();
-        let all_pieces: Vec<_> = spans.into_iter().flatten().collect();
-        let freq_map =
-            build_token_freq_map(&content, &all_pieces, threads, &pretokenize_regex_str)?;
-        let freq_map = convert_freq_map_to_u16(freq_map);
-        let result = train_bpe(freq_map, vocab_size as usize, &special_tokens, threads)?;
+        let mut special_token_map: HashMap<String, TokenId> = HashMap::new();
+        {
+            // this block extracts special tokens from `Vec<u8>` to `String`
+            // and stores to `special_token_map` for easier searching and encoding.
+            // special token bytes remain in the vocab for decoding
+            if let Some(special_tokens) = special_tokens {
+                // NOTE: this copy should be fine since usually there are not a lot of special tokens
+                let special_tokens_set: HashSet<Vec<u8>> = special_tokens
+                    .iter()
+                    .map(|t| t.as_bytes().to_vec())
+                    .collect();
+                let special_token_counts = special_tokens.len();
+                let total_vocab_len = vocab.len();
+                // TODO: should use better error handling
+                if special_token_counts >= (u16::MAX as usize)
+                    || total_vocab_len >= (u16::MAX as usize)
+                    || special_token_counts > total_vocab_len
+                {
+                    panic!("invalid inputs");
+                }
+
+                // now this should be valid
+                let special_token_counts = special_token_counts as u16;
+                let total_vocab_len = total_vocab_len as u16;
+                for idx in (total_vocab_len - special_token_counts)..total_vocab_len {
+                    // the course's test code mixed special tokens inside vocab
+                    if let Some(bytes) = vocab.get(&idx) {
+                        if !special_tokens_set.contains(bytes) {
+                            panic!("invalid inputs");
+                        }
+
+                        let special_token = str::from_utf8(bytes)
+                            .expect("should be valid UTF-8")
+                            .to_string();
+
+                        special_token_map.insert(special_token, idx);
+                    } else {
+                        panic!("{idx} should be a valid special token");
+                    }
+                }
+            }
+        }
+
+        let vocab_encoder_map: HashMap<_, _> = vocab.iter().map(|(i, b)| (b, *i)).collect();
+        let encoder = build_encoder(&vocab_encoder_map, &merges);
+        let byte_encoder = build_byte_encoder(&vocab);
+
+        let special_regex = if let Some(special_tokens) = special_tokens {
+            let pat = special_tokens
+                .iter()
+                .filter(|st| !st.is_empty())
+                .map(|s| escape_literal(s))
+                .collect::<Vec<_>>()
+                .join("|");
+            Some(Regex::new(&pat)?)
+        } else {
+            None
+        };
+
+        let pretokenize_regex = Regex::new(pretokenize_regex_str)?;
+
         Ok(Tokenizer {
-            vocab: result.vocab,
-            merges: result.merges,
-            special_tokens: special_tokens.iter().map(|s| s.clone()).collect(),
+            decoder: vocab,
+            encoder,
+            special_tokens_encoder: special_token_map,
+            byte_encoder,
+            pretokenize_regex,
+            special_regex,
         })
     }
 
-    pub fn load(vocab_content: &str, merges_content: &str, special_tokens: &[String]) -> Self {
-        Tokenizer {
-            vocab: parse_vocab(vocab_content),
-            merges: parse_merges(merges_content),
-            special_tokens: special_tokens.iter().map(|s| s.clone()).collect(),
+    // TODO: encode in parallel
+    pub fn encode(&self, content: &str) -> Result<TokenIds, CustomError> {
+        let mut result: TokenIds = Vec::new();
+
+        if let Some(special_re) = &self.special_regex {
+            let mut cursor = 0;
+            for mat in special_re.find_iter(content)? {
+                let mat = mat?;
+                self.encode_normal(
+                    &self.pretokenize_regex,
+                    &content[cursor..mat.start()],
+                    &mut result,
+                )?;
+
+                let special = &content[mat.start()..mat.end()];
+                let id = self
+                    .special_tokens_encoder
+                    .get(special)
+                    .expect("special token should exist");
+                result.push(*id);
+                cursor = mat.end();
+            }
+
+            self.encode_normal(&self.pretokenize_regex, &content[cursor..], &mut result)?;
+        } else {
+            self.encode_normal(&self.pretokenize_regex, &content, &mut result)?;
         }
+
+        Ok(result)
     }
+
+    fn encode_normal(
+        &self,
+        regex: &Regex,
+        content: &str,
+        result: &mut TokenIds,
+    ) -> Result<(), CustomError> {
+        for mat in regex.find_iter(content)? {
+            let mat = mat?;
+            let s = &content[mat.start()..mat.end()];
+            if let Some(id) = self.special_tokens_encoder.get(s) {
+                result.push(*id);
+            } else {
+                let mut buf: TokenIds = s
+                    .as_bytes()
+                    .iter()
+                    .map(|b| {
+                        let b = self.byte_encoder.get(b).expect("character should exist");
+                        *b
+                    })
+                    .collect();
+                self.encode_internal(&mut buf);
+                result.extend(buf);
+            }
+        }
+        Ok(())
+    }
+
+    // NOTE: this is a naive implementation
+    // Inside of the `loop` every pair is computed unless no more pair can
+    // be merged. This is fine for this course, since the raw text could
+    // be split into short chunks, so this naive approach is easy to
+    // implement. In OpenAI's `tiktoken`, BinaryHeap is used. A heap-based
+    // implementation avoids rescanning the whole token list on each merge
+    // by updating only candidate pairs adjacent to the replacement. (A
+    // `Vec<>` can be used as a double linked list.) This approach reduces
+    // the time complexity from O(N ^ 2) to O(N log N).
+    fn encode_internal(&self, buf: &mut Vec<TokenId>) {
+        // len holds the actual length
+        let mut len = buf.len();
+
+        loop {
+            let mut min_pair: Option<Replacement> = None;
+            if len < 2 {
+                break;
+            }
+
+            for i in 0..(len - 1) {
+                let a = buf[i];
+                let b = buf[i + 1];
+                let pair = pack_pair(a, b);
+                if let Some(rule) = self.encoder.get(&pair) {
+                    match min_pair.as_mut() {
+                        Some(x) => {
+                            if rule.rank < x.rank {
+                                x.pair = pair;
+                                x.rank = rule.rank;
+                                x.new_id = rule.new_id;
+                            }
+                        }
+                        None => {
+                            min_pair = Some(Replacement {
+                                pair,
+                                rank: rule.rank,
+                                new_id: rule.new_id,
+                            })
+                        }
+                    }
+                }
+            }
+
+            if let Some(min_pair) = &min_pair {
+                let count = merge_token_with_id(buf, len, min_pair);
+                len -= count;
+            } else {
+                // no more to be merged
+                break;
+            }
+        }
+
+        buf.truncate(len);
+    }
+
+    // TODO: decode in parallel
+    pub fn decode(&self, ids: &[TokenId]) -> String {
+        let mut buf = Vec::new();
+        for id in ids {
+            buf.extend(self.decoder.get(id).expect("id should exist").clone());
+        }
+        // TODO: Better error handling
+        String::from_utf8(buf).expect("should be a valid UTF-8 string")
+    }
+}
+
+struct Replacement {
+    pair: PackedPair,
+    rank: usize,
+    new_id: TokenId,
+}
+
+// This helper replaces a pair in place
+//
+// TODO: it should be the similar or exact the same as the merge step in training
+fn merge_token_with_id(buf: &mut Vec<TokenId>, len: usize, replacement: &Replacement) -> usize {
+    let mut read = 0;
+    let mut write = 0;
+    let mut count = 0;
+
+    while read + 1 < len {
+        let a = buf[read];
+        let b = buf[read + 1];
+        let pair = pack_pair(a, b);
+        if pair == replacement.pair {
+            buf[write] = replacement.new_id;
+            read += 2;
+            count += 1;
+        } else {
+            buf[write] = a;
+            read += 1;
+        }
+        write += 1;
+    }
+
+    if read == len - 1 {
+        buf[write] = buf[len - 1];
+    }
+
+    return count;
 }
