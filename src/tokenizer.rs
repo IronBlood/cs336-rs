@@ -1,10 +1,15 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    thread,
+};
 
 use crate::{
     error::CustomError,
+    file::{load_merges, load_vocab},
     regex::{Regex, escape_literal},
     types::{PackedPair, TokenBytes, TokenId, TokenIds},
-    utils::pack_pair,
+    utils::{init_vocab, pack_pair},
 };
 
 struct MergeRule {
@@ -62,6 +67,83 @@ fn build_byte_encoder(vocab: &HashMap<TokenId, TokenBytes>) -> HashMap<u8, Token
 }
 
 impl Tokenizer {
+    pub fn load(
+        vocab_path: &str,
+        merges_path: &str,
+        special_tokens: &[String],
+        pretokenize_regex_str: &str,
+    ) -> Result<Self, CustomError> {
+        let vocab_path = PathBuf::from(vocab_path);
+        let merges_path = PathBuf::from(merges_path);
+
+        let vocab = load_vocab(&vocab_path);
+        let merges = load_merges(&merges_path);
+
+        let mut special_token_map: HashMap<String, TokenId> = HashMap::new();
+        {
+            let id = vocab.len();
+            if id + special_tokens.len() > (u16::MAX as usize) {
+                panic!("invalid vocab and special token size");
+            }
+
+            let mut id = id as u16;
+            for special_token in special_tokens {
+                special_token_map.insert(special_token.clone(), id);
+                id += 1;
+            }
+        }
+
+        let vocab_encoder_map: HashMap<_, _> = vocab
+            .iter()
+            .enumerate()
+            .map(|(id, bytes)| (bytes, id as TokenId))
+            .collect();
+        let encoder = build_encoder(&vocab_encoder_map, &merges);
+        let byte_encoder: HashMap<_, _> = init_vocab()
+            .into_iter()
+            .enumerate()
+            .map(|(id, bytes)| {
+                // protections
+                if bytes.len() != 1 {
+                    panic!("should be single character");
+                }
+                if id > (u8::MAX as usize) {
+                    eprintln!("invalid id {}", id);
+                    panic!("invalid id");
+                }
+
+                (bytes[0], id as TokenId)
+            })
+            .collect();
+
+        let special_regex = {
+            let pat = special_tokens
+                .iter()
+                .filter(|st| !st.is_empty())
+                .map(|s| escape_literal(s))
+                .collect::<Vec<_>>()
+                .join("|");
+            Some(Regex::new(&pat)?)
+        };
+
+        let pretokenize_regex = Regex::new(pretokenize_regex_str)?;
+
+        let decoder: HashMap<_, _> = vocab
+            .into_iter()
+            .enumerate()
+            .map(|(id, bytes)| (id as u16, bytes))
+            .collect();
+
+        Ok(Tokenizer {
+            decoder,
+            encoder,
+            special_tokens_encoder: special_token_map,
+            byte_encoder,
+            pretokenize_regex,
+            special_regex,
+        })
+    }
+
     // The test cases used in CS336 isn't in the best shape, so this function
     // transform to the internal data structures
     pub fn load_course(
@@ -172,6 +254,51 @@ impl Tokenizer {
         Ok(result)
     }
 
+    pub fn encode_mt(&self, content: &str, threads: usize) -> Result<TokenIds, CustomError> {
+        let mut result: TokenIds = Vec::new();
+        let mut encoded_token_cache: HashMap<&str, TokenIds> = HashMap::new();
+
+        if let Some(special_re) = &self.special_regex {
+            let mut cursor = 0;
+            for mat in special_re.find_iter(content)? {
+                let mat = mat?;
+                self.encode_normal_mt(
+                    &self.pretokenize_regex,
+                    &content[cursor..mat.start()],
+                    &mut result,
+                    threads,
+                    &mut encoded_token_cache,
+                )?;
+
+                let special = &content[mat.start()..mat.end()];
+                let id = self
+                    .special_tokens_encoder
+                    .get(special)
+                    .expect("special token should exist");
+                result.push(*id);
+                cursor = mat.end();
+            }
+
+            self.encode_normal_mt(
+                &self.pretokenize_regex,
+                &content[cursor..],
+                &mut result,
+                threads,
+                &mut encoded_token_cache,
+            )?;
+        } else {
+            self.encode_normal_mt(
+                &self.pretokenize_regex,
+                &content,
+                &mut result,
+                threads,
+                &mut encoded_token_cache,
+            )?;
+        }
+
+        Ok(result)
+    }
+
     fn encode_normal(
         &self,
         regex: &Regex,
@@ -181,22 +308,90 @@ impl Tokenizer {
         for mat in regex.find_iter(content)? {
             let mat = mat?;
             let s = &content[mat.start()..mat.end()];
-            if let Some(id) = self.special_tokens_encoder.get(s) {
-                result.push(*id);
-            } else {
-                let mut buf: TokenIds = s
-                    .as_bytes()
-                    .iter()
-                    .map(|b| {
-                        let b = self.byte_encoder.get(b).expect("character should exist");
-                        *b
-                    })
-                    .collect();
-                self.encode_internal(&mut buf);
-                result.extend(buf);
-            }
+            let mut buf: TokenIds = s
+                .as_bytes()
+                .iter()
+                .map(|b| {
+                    let b = self.byte_encoder.get(b).expect("character should exist");
+                    *b
+                })
+                .collect();
+            self.encode_internal(&mut buf);
+            result.extend(buf);
         }
         Ok(())
+    }
+
+    fn encode_normal_mt<'content>(
+        &self,
+        regex: &Regex,
+        content: &'content str,
+        result: &mut TokenIds,
+        threads: usize,
+        encoded_token_cache: &mut HashMap<&'content str, TokenIds>,
+    ) -> Result<(), CustomError> {
+        let mut str_to_be_encoded = Vec::new();
+        let mut unique_string_slices = HashSet::new();
+
+        for mat in regex.find_iter(content)? {
+            let mat = mat?;
+            let s = &content[mat.start()..mat.end()];
+            str_to_be_encoded.push(s);
+            if !encoded_token_cache.contains_key(s) {
+                unique_string_slices.insert(s);
+            }
+        }
+
+        self.encode_unique_tokens(unique_string_slices, threads, encoded_token_cache)?;
+
+        for s in str_to_be_encoded {
+            let ids = encoded_token_cache.get(s).expect("token should exist");
+            result.extend(ids.iter().copied());
+        }
+
+        Ok(())
+    }
+
+    fn encode_unique_tokens<'content>(
+        &self,
+        tokens: HashSet<&'content str>,
+        threads: usize,
+        encoded_token_cache: &mut HashMap<&'content str, TokenIds>,
+    ) -> Result<(), CustomError> {
+        let chunk_size = tokens.len().div_ceil(threads).max(1);
+        let tokens: Vec<&str> = tokens.into_iter().collect();
+        thread::scope(|scope| -> Result<(), CustomError> {
+            let mut handles = Vec::new();
+            for chunk in tokens.chunks(chunk_size) {
+                handles.push(scope.spawn(move || -> HashMap<&'content str, TokenIds> {
+                    chunk
+                        .iter()
+                        .map(|&s| {
+                            let mut buf: TokenIds = s
+                                .as_bytes()
+                                .iter()
+                                .map(|b| {
+                                    let b =
+                                        self.byte_encoder.get(b).expect("character should exist");
+                                    *b
+                                })
+                                .collect();
+                            self.encode_internal(&mut buf);
+                            (s, buf)
+                        })
+                        .collect()
+                }));
+            }
+
+            for handle in handles {
+                let thread_cache = handle.join().map_err(|_| CustomError::ThreadPanic)?;
+                for (k, v) in thread_cache.into_iter() {
+                    encoded_token_cache.insert(k, v);
+                }
+            }
+
+            Ok(())
+        })
     }
 
     // NOTE: this is a naive implementation

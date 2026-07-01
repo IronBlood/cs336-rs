@@ -471,7 +471,7 @@ fn apply_count_delta(all_pairs: &mut HashMap<PackedPair, usize>, delta: PairCoun
     }
 }
 
-fn init_vocab() -> Vec<TokenBytes> {
+pub fn init_vocab() -> Vec<TokenBytes> {
     (0..=u8::MAX).map(|i| vec![i]).collect()
 }
 
