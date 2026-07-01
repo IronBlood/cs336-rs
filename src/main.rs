@@ -5,7 +5,7 @@ use std::{
     process, thread,
 };
 
-use cs336_rs::utils::{Span, build_token_freq_map, find_chunk_boundaries, find_pretoken_spans};
+use cs336_rs::utils::{build_token_freq_map, find_chunk_boundaries, find_pretoken_spans};
 
 struct CliArgs {
     file_path: PathBuf,
@@ -107,7 +107,7 @@ fn main() {
     let gpt2_regex_str =
         r"'(?:[sdmt]|ll|ve|re)| ?\p{L}++| ?\p{N}++| ?[^\s\p{L}\p{N}]++|\s++$|\s+(?!\S)|\s";
 
-    let all_pieces: Vec<Span> = spans.into_iter().flatten().collect();
+    let all_pieces: Vec<_> = spans.into_iter().flatten().collect();
     let freq_map = build_token_freq_map(&content, &all_pieces, args.threads, &gpt2_regex_str)
         .expect("should succeed");
     println!("result: {} entries", freq_map.len());

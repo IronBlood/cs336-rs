@@ -2,10 +2,10 @@ use std::{fs, path::PathBuf};
 
 use crate::{
     encode::{bytes_to_string, string_to_bytes},
-    utils::TokenBytes,
+    types::TokenBytes,
 };
 
-fn parse_vocab(content: &str) -> Vec<TokenBytes> {
+pub fn parse_vocab(content: &str) -> Vec<TokenBytes> {
     content
         .trim_end()
         .lines()
@@ -13,7 +13,7 @@ fn parse_vocab(content: &str) -> Vec<TokenBytes> {
         .collect()
 }
 
-fn serialize_vocab(vocab: &[TokenBytes]) -> String {
+pub fn serialize_vocab(vocab: &[TokenBytes]) -> String {
     vocab
         .iter()
         .map(|token| bytes_to_string(token))
@@ -21,7 +21,7 @@ fn serialize_vocab(vocab: &[TokenBytes]) -> String {
         .join("\n")
 }
 
-fn parse_merges(content: &str) -> Vec<(TokenBytes, TokenBytes)> {
+pub fn parse_merges(content: &str) -> Vec<(TokenBytes, TokenBytes)> {
     content
         .trim_end()
         .lines()
@@ -36,7 +36,7 @@ fn parse_merges(content: &str) -> Vec<(TokenBytes, TokenBytes)> {
         .collect()
 }
 
-fn serialize_merges(merges: &[(TokenBytes, TokenBytes)]) -> String {
+pub fn serialize_merges(merges: &[(TokenBytes, TokenBytes)]) -> String {
     merges
         .iter()
         .map(|(token_1, token_2)| {
