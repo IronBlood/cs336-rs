@@ -231,12 +231,12 @@ pub fn convert_freq_map_to_u16(map: BorrowedWordFreqMap<'_>) -> HashMap<TokenIds
 }
 
 /// Turning a [u16; 2] to a u32 to be used as the hash key to save time
-fn pack_pair(hi: TokenId, lo: TokenId) -> PackedPair {
+pub fn pack_pair(hi: TokenId, lo: TokenId) -> PackedPair {
     (hi as u32) << 16 | lo as u32
 }
 
 /// extract the internal used u32 form to the original byte pair
-fn unpack_pair(x: PackedPair) -> [TokenId; 2] {
+pub fn unpack_pair(x: PackedPair) -> [TokenId; 2] {
     [(x >> 16) as u16, x as u16]
 }
 
