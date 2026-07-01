@@ -114,7 +114,7 @@ fn main() {
             let t = Instant::now();
 
             let ids = if mt_mode {
-                todo!()
+                tokenizer.encode_mt(piece, cpus).expect("should be encoded")
             } else {
                 tokenizer.encode(piece).expect("should be encoded")
             };
