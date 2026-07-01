@@ -24,30 +24,33 @@ fn parse_args() -> Result<CliArgs, String> {
         .next()
         .unwrap_or_else(|| "tokenize_samples".to_string());
 
-    let err_msg = format!(
-        "usage: \"{program} <file_path>\" or \"{program}\" --vocab <vocab_path> --merges <merges_path>"
-    );
+    let usage =
+        || format!("usage: {program} <file_path> [--vocab <vocab_path> --merges <merges_path>]");
 
-    let file_path = args.next().ok_or_else(|| err_msg.clone())?;
+    let file_path = args.next().ok_or_else(usage)?;
 
-    let tokenizer_cfg = match args.next() {
-        Some(flag) if flag == "--vocab" => {
-            let vocab_path = args.next().ok_or_else(|| err_msg.clone())?;
-            let merges_path = match args.next() {
-                Some(flag) if flag == "--merges" => args.next().ok_or_else(|| err_msg.clone())?,
-                _ => {
-                    return Err(err_msg);
-                }
-            };
-            Some(TokenizerCfg {
-                vocab_path,
-                merges_path,
-            })
+    let mut vocab_path = None;
+    let mut merges_path = None;
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--vocab" => {
+                vocab_path = Some(args.next().ok_or_else(usage)?);
+            }
+            "--merges" => {
+                merges_path = Some(args.next().ok_or_else(usage)?);
+            }
+            _ => return Err(usage()),
         }
-        Some(_) => {
-            return Err(err_msg);
-        }
-        None => None,
+    }
+
+    let tokenizer_cfg = match (vocab_path, merges_path) {
+        (Some(vocab_path), Some(merges_path)) => Some(TokenizerCfg {
+            vocab_path,
+            merges_path,
+        }),
+        (None, None) => None,
+        _ => return Err("must provide both --vocab and --merges".to_string()),
     };
 
     Ok(CliArgs {
