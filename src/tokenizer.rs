@@ -256,8 +256,6 @@ impl Tokenizer {
 
     pub fn encode_mt(&self, content: &str, threads: usize) -> Result<TokenIds, CustomError> {
         let mut result: TokenIds = Vec::new();
-        let mut encoded_token_cache: HashMap<&str, TokenIds> = HashMap::new();
-
         if let Some(special_re) = &self.special_regex {
             let mut cursor = 0;
             for mat in special_re.find_iter(content)? {
@@ -267,7 +265,6 @@ impl Tokenizer {
                     &content[cursor..mat.start()],
                     &mut result,
                     threads,
-                    &mut encoded_token_cache,
                 )?;
 
                 let special = &content[mat.start()..mat.end()];
@@ -284,10 +281,52 @@ impl Tokenizer {
                 &content[cursor..],
                 &mut result,
                 threads,
+            )?;
+        } else {
+            self.encode_normal_mt(&self.pretokenize_regex, &content, &mut result, threads)?;
+        }
+
+        Ok(result)
+    }
+
+    pub fn encode_mt_with_caching(
+        &self,
+        content: &str,
+        threads: usize,
+    ) -> Result<TokenIds, CustomError> {
+        let mut result: TokenIds = Vec::new();
+        let mut encoded_token_cache: HashMap<&str, TokenIds> = HashMap::new();
+
+        if let Some(special_re) = &self.special_regex {
+            let mut cursor = 0;
+            for mat in special_re.find_iter(content)? {
+                let mat = mat?;
+                self.encode_normal_mt_with_caching(
+                    &self.pretokenize_regex,
+                    &content[cursor..mat.start()],
+                    &mut result,
+                    threads,
+                    &mut encoded_token_cache,
+                )?;
+
+                let special = &content[mat.start()..mat.end()];
+                let id = self
+                    .special_tokens_encoder
+                    .get(special)
+                    .expect("special token should exist");
+                result.push(*id);
+                cursor = mat.end();
+            }
+
+            self.encode_normal_mt_with_caching(
+                &self.pretokenize_regex,
+                &content[cursor..],
+                &mut result,
+                threads,
                 &mut encoded_token_cache,
             )?;
         } else {
-            self.encode_normal_mt(
+            self.encode_normal_mt_with_caching(
                 &self.pretokenize_regex,
                 &content,
                 &mut result,
@@ -322,7 +361,53 @@ impl Tokenizer {
         Ok(())
     }
 
-    fn encode_normal_mt<'content>(
+    fn encode_normal_mt(
+        &self,
+        regex: &Regex,
+        content: &str,
+        result: &mut TokenIds,
+        threads: usize,
+    ) -> Result<(), CustomError> {
+        let mut str_to_be_encoded = Vec::new();
+
+        for mat in regex.find_iter(content)? {
+            let mat = mat?;
+            let s = &content[mat.start()..mat.end()];
+            str_to_be_encoded.push(s);
+        }
+
+        let chunk_size = str_to_be_encoded.len().div_ceil(threads).max(1);
+        thread::scope(|scope| -> Result<(), CustomError> {
+            let mut handles = Vec::new();
+            for chunk in str_to_be_encoded.chunks(chunk_size) {
+                handles.push(scope.spawn(move || -> TokenIds {
+                    let mut ids = TokenIds::new();
+                    for &s in chunk {
+                        let mut buf: TokenIds = s
+                            .as_bytes()
+                            .iter()
+                            .map(|b| {
+                                let b = self.byte_encoder.get(b).expect("character should exist");
+                                *b
+                            })
+                            .collect();
+                        self.encode_internal(&mut buf);
+                        ids.extend(buf);
+                    }
+
+                    ids
+                }));
+            }
+
+            for handle in handles {
+                let thread_ids = handle.join().map_err(|_| CustomError::ThreadPanic)?;
+                result.extend(thread_ids);
+            }
+            Ok(())
+        })
+    }
+
+    fn encode_normal_mt_with_caching<'content>(
         &self,
         regex: &Regex,
         content: &'content str,
