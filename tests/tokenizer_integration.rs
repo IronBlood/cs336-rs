@@ -26,7 +26,7 @@ fn check_vocab(vocab_path: &str) {
 fn get_tokenizer_from_vocab_merges_path(
     vocab_path: &str,
     merges_path: &str,
-    special_tokens: Option<&[&str]>,
+    special_tokens: Option<&[String]>,
 ) -> Tokenizer {
     let gpt2_byte_decoder: HashMap<char, u8> = gpt2_bytes_to_unicode()
         .into_iter()
@@ -46,7 +46,7 @@ fn get_tokenizer_from_vocab_merges_path(
 
     if let Some(special_tokens) = special_tokens {
         let mut unique_bytes: HashSet<_> = vocab.values().cloned().collect();
-        for &st in special_tokens {
+        for st in special_tokens {
             let st_bytes = st.as_bytes().to_vec();
             if unique_bytes.insert(st_bytes.clone()) {
                 if vocab.len() >= u16::MAX as usize {
@@ -133,7 +133,7 @@ fn test_roundtrip_unicode_string() {
 
 #[test]
 fn test_roundtrip_unicode_string_with_special_tokens() {
-    let special_tokens = vec!["<|endoftext|>"];
+    let special_tokens = vec!["<|endoftext|>".to_string()];
     let t = get_tokenizer_from_vocab_merges_path(VOCAB_PATH, MERGES_PATH, Some(&special_tokens));
 
     let test_string = "Héllò hôw <|endoftext|><|endoftext|> are ü? 🙃<|endoftext|>";
@@ -151,7 +151,7 @@ fn test_roundtrip_unicode_string_with_special_tokens() {
 
 #[test]
 fn test_roundtrip_special_tokens() {
-    let special_tokens = vec!["<|endoftext|>"];
+    let special_tokens = vec!["<|endoftext|>".to_string()];
     let t = get_tokenizer_from_vocab_merges_path(VOCAB_PATH, MERGES_PATH, Some(&special_tokens));
 
     let test_string = "<|endoftext|>";
@@ -164,7 +164,10 @@ fn test_roundtrip_special_tokens() {
 #[test]
 // NOTE:it was designed to be `50257` instead of two `50256`, but this is a rare case, even the reference tokenizer doesn't support it
 fn test_overlapping_special_tokens() {
-    let special_tokens = vec!["<|endoftext|>", "<|endoftext|><|endoftext|>"];
+    let special_tokens = vec![
+        "<|endoftext|>".to_string(),
+        "<|endoftext|><|endoftext|>".to_string(),
+    ];
     let t = get_tokenizer_from_vocab_merges_path(VOCAB_PATH, MERGES_PATH, Some(&special_tokens));
 
     let test_string = "Hello, how <|endoftext|><|endoftext|> are you?<|endoftext|>";
@@ -219,7 +222,7 @@ fn test_german_roundtrip() {
 
 #[test]
 fn test_tinystories_sample_roundtrip() {
-    let special_tokens = vec!["<|endoftext|>"];
+    let special_tokens = vec!["<|endoftext|>".to_string()];
     let t = get_tokenizer_from_vocab_merges_path(VOCAB_PATH, MERGES_PATH, Some(&special_tokens));
 
     let content =
@@ -276,7 +279,7 @@ fn test_tinystories_sample_debug() {
 
 #[test]
 fn test_encode_special_token_trailing_newlines() {
-    let special_tokens = vec!["<|endoftext|>"];
+    let special_tokens = vec!["<|endoftext|>".to_string()];
     let t = get_tokenizer_from_vocab_merges_path(VOCAB_PATH, MERGES_PATH, Some(&special_tokens));
 
     let content = fs::read_to_string("tests/fixtures/special_token_trailing_newlines.txt")
@@ -289,7 +292,7 @@ fn test_encode_special_token_trailing_newlines() {
 
 #[test]
 fn test_encode_special_token_double_newline_non_whitespace() {
-    let special_tokens = vec!["<|endoftext|>"];
+    let special_tokens = vec!["<|endoftext|>".to_string()];
     let t = get_tokenizer_from_vocab_merges_path(VOCAB_PATH, MERGES_PATH, Some(&special_tokens));
 
     let content =
@@ -303,7 +306,7 @@ fn test_encode_special_token_double_newline_non_whitespace() {
 
 #[test]
 fn test_tinystories_5m_roundtrip() {
-    let special_tokens = vec!["<|endoftext|>"];
+    let special_tokens = vec!["<|endoftext|>".to_string()];
     let t = get_tokenizer_from_vocab_merges_path(VOCAB_PATH, MERGES_PATH, Some(&special_tokens));
 
     let content =
