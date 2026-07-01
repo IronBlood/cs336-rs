@@ -1,10 +1,14 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+};
 
 use crate::{
     error::CustomError,
+    file::{load_merges, load_vocab},
     regex::{Regex, escape_literal},
     types::{PackedPair, TokenBytes, TokenId, TokenIds},
-    utils::pack_pair,
+    utils::{init_vocab, pack_pair},
 };
 
 struct MergeRule {
@@ -62,6 +66,83 @@ fn build_byte_encoder(vocab: &HashMap<TokenId, TokenBytes>) -> HashMap<u8, Token
 }
 
 impl Tokenizer {
+    pub fn load(
+        vocab_path: &str,
+        merges_path: &str,
+        special_tokens: &[String],
+        pretokenize_regex_str: &str,
+    ) -> Result<Self, CustomError> {
+        let vocab_path = PathBuf::from(vocab_path);
+        let merges_path = PathBuf::from(merges_path);
+
+        let vocab = load_vocab(&vocab_path);
+        let merges = load_merges(&merges_path);
+
+        let mut special_token_map: HashMap<String, TokenId> = HashMap::new();
+        {
+            let id = vocab.len();
+            if id + special_tokens.len() > (u16::MAX as usize) {
+                panic!("invalid vocab and special token size");
+            }
+
+            let mut id = id as u16;
+            for special_token in special_tokens {
+                special_token_map.insert(special_token.clone(), id);
+                id += 1;
+            }
+        }
+
+        let vocab_encoder_map: HashMap<_, _> = vocab
+            .iter()
+            .enumerate()
+            .map(|(id, bytes)| (bytes, id as TokenId))
+            .collect();
+        let encoder = build_encoder(&vocab_encoder_map, &merges);
+        let byte_encoder: HashMap<_, _> = init_vocab()
+            .into_iter()
+            .enumerate()
+            .map(|(id, bytes)| {
+                // protections
+                if bytes.len() != 1 {
+                    panic!("should be single character");
+                }
+                if id > (u8::MAX as usize) {
+                    eprintln!("invalid id {}", id);
+                    panic!("invalid id");
+                }
+
+                (bytes[0], id as TokenId)
+            })
+            .collect();
+
+        let special_regex = {
+            let pat = special_tokens
+                .iter()
+                .filter(|st| !st.is_empty())
+                .map(|s| escape_literal(s))
+                .collect::<Vec<_>>()
+                .join("|");
+            Some(Regex::new(&pat)?)
+        };
+
+        let pretokenize_regex = Regex::new(pretokenize_regex_str)?;
+
+        let decoder: HashMap<_, _> = vocab
+            .into_iter()
+            .enumerate()
+            .map(|(id, bytes)| (id as u16, bytes))
+            .collect();
+
+        Ok(Tokenizer {
+            decoder,
+            encoder,
+            special_tokens_encoder: special_token_map,
+            byte_encoder,
+            pretokenize_regex,
+            special_regex,
+        })
+    }
+
     // The test cases used in CS336 isn't in the best shape, so this function
     // transform to the internal data structures
     pub fn load_course(
