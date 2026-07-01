@@ -262,20 +262,16 @@ impl Tokenizer {
         for mat in regex.find_iter(content)? {
             let mat = mat?;
             let s = &content[mat.start()..mat.end()];
-            if let Some(id) = self.special_tokens_encoder.get(s) {
-                result.push(*id);
-            } else {
-                let mut buf: TokenIds = s
-                    .as_bytes()
-                    .iter()
-                    .map(|b| {
-                        let b = self.byte_encoder.get(b).expect("character should exist");
-                        *b
-                    })
-                    .collect();
-                self.encode_internal(&mut buf);
-                result.extend(buf);
-            }
+            let mut buf: TokenIds = s
+                .as_bytes()
+                .iter()
+                .map(|b| {
+                    let b = self.byte_encoder.get(b).expect("character should exist");
+                    *b
+                })
+                .collect();
+            self.encode_internal(&mut buf);
+            result.extend(buf);
         }
         Ok(())
     }
