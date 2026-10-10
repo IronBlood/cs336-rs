@@ -116,7 +116,9 @@ impl Tokenizer {
             })
             .collect();
 
-        let special_regex = {
+        let special_regex = if special_tokens.is_empty() {
+            None
+        } else {
             let pat = special_tokens
                 .iter()
                 .filter(|st| !st.is_empty())
@@ -204,13 +206,17 @@ impl Tokenizer {
         let byte_encoder = build_byte_encoder(&vocab);
 
         let special_regex = if let Some(special_tokens) = special_tokens {
-            let pat = special_tokens
-                .iter()
-                .filter(|st| !st.is_empty())
-                .map(|s| escape_literal(s))
-                .collect::<Vec<_>>()
-                .join("|");
-            Some(Regex::new(&pat)?)
+            if special_tokens.is_empty() {
+                None
+            } else {
+                let pat = special_tokens
+                    .iter()
+                    .filter(|st| !st.is_empty())
+                    .map(|s| escape_literal(s))
+                    .collect::<Vec<_>>()
+                    .join("|");
+                Some(Regex::new(&pat)?)
+            }
         } else {
             None
         };
