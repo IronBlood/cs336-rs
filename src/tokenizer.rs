@@ -116,7 +116,9 @@ impl Tokenizer {
             })
             .collect();
 
-        let special_regex = {
+        let special_regex = if special_tokens.is_empty() {
+            None
+        } else {
             let pat = special_tokens
                 .iter()
                 .filter(|st| !st.is_empty())
@@ -128,11 +130,15 @@ impl Tokenizer {
 
         let pretokenize_regex = Regex::new(pretokenize_regex_str)?;
 
-        let decoder: HashMap<_, _> = vocab
+        let mut decoder: HashMap<_, _> = vocab
             .into_iter()
             .enumerate()
             .map(|(id, bytes)| (id as u16, bytes))
             .collect();
+
+        for (special, id) in &special_token_map {
+            decoder.insert(*id, special.as_bytes().to_vec());
+        }
 
         Ok(Tokenizer {
             decoder,
@@ -200,13 +206,17 @@ impl Tokenizer {
         let byte_encoder = build_byte_encoder(&vocab);
 
         let special_regex = if let Some(special_tokens) = special_tokens {
-            let pat = special_tokens
-                .iter()
-                .filter(|st| !st.is_empty())
-                .map(|s| escape_literal(s))
-                .collect::<Vec<_>>()
-                .join("|");
-            Some(Regex::new(&pat)?)
+            if special_tokens.is_empty() {
+                None
+            } else {
+                let pat = special_tokens
+                    .iter()
+                    .filter(|st| !st.is_empty())
+                    .map(|s| escape_literal(s))
+                    .collect::<Vec<_>>()
+                    .join("|");
+                Some(Regex::new(&pat)?)
+            }
         } else {
             None
         };
